@@ -1,0 +1,248 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+  <h1 class="h4 mb-0">{{ t('Channels') }}</h1>
+  <div class="d-flex flex-wrap gap-2">
+    <button class="btn btn-sm btn-outline-primary" data-bulk="sync">
+      <i class="bi bi-arrow-repeat"></i> {{ t('Sync Channels') }}
+    </button>
+    <button class="btn btn-sm btn-outline-success" data-bulk="start-all">
+      <i class="bi bi-play-fill"></i> {{ t('Start All') }}
+    </button>
+    <button class="btn btn-sm btn-outline-danger" data-bulk="stop-all" data-confirm="Stop every running channel?">
+      <i class="bi bi-stop-fill"></i> {{ t('Stop All') }}
+    </button>
+    <button class="btn btn-sm btn-outline-warning" data-bulk="restart-selected" data-confirm="Restart the selected channels?">
+      <i class="bi bi-arrow-clockwise"></i> {{ t('Restart Selected') }}
+    </button>
+    <button class="btn btn-sm btn-outline-info" data-bulk="refresh-selected">
+      <i class="bi bi-link-45deg"></i> {{ t('Refresh Selected') }}
+    </button>
+    <button class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#bulkModal">
+      <i class="bi bi-list-ul"></i> {{ t('Bulk Add') }}
+    </button>
+    <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#channelModal">
+      <i class="bi bi-plus-lg"></i> {{ t('Add Channel') }}
+    </button>
+  </div>
+</div>
+
+{% include "partials/summary_cards.html" %}
+
+<div class="card mt-3">
+  <div class="card-body">
+    {% include "partials/system_stats.html" %}
+  </div>
+</div>
+
+<form class="row g-2 align-items-center my-3" method="get" action="/">
+  <div class="col-12 col-md-5">
+    <input type="search" class="form-control" name="q" value="{{ search }}" placeholder="{{ t('Search channel...') }}">
+  </div>
+  <div class="col-8 col-md-3">
+    <select class="form-select" name="status" onchange="this.form.submit()">
+      <option value="all" {% if status_filter == 'all' %}selected{% endif %}>{{ t('All') }}</option>
+      <option value="online" {% if status_filter == 'online' %}selected{% endif %}>{{ t('Online') }}</option>
+      <option value="offline" {% if status_filter == 'offline' %}selected{% endif %}>{{ t('Offline') }}</option>
+      <option value="reconnecting" {% if status_filter == 'reconnecting' %}selected{% endif %}>{{ t('Reconnecting') }}</option>
+      <option value="disabled" {% if status_filter == 'disabled' %}selected{% endif %}>{{ t('Disabled') }}</option>
+    </select>
+  </div>
+  <div class="col-4 col-md-2">
+    <button class="btn btn-outline-secondary w-100" type="submit">{{ t('Filter') }}</button>
+  </div>
+</form>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead>
+        <tr>
+          <th style="width: 2rem;"><input class="form-check-input" type="checkbox" id="select-all" aria-label="Select all"></th>
+          <th>{{ t('Channel') }}</th>
+          <th>{{ t('Status') }}</th>
+          <th>{{ t('Source') }}</th>
+          <th>{{ t('RTMP') }}</th>
+          <th>{{ t('Uptime') }}</th>
+          <th>{{ t('Bitrate') }}</th>
+          <th>{{ t('Last check') }}</th>
+          <th>{{ t('Restarts') }}</th>
+          <th>{{ t('Actions') }}</th>
+        </tr>
+      </thead>
+      {% include "partials/channel_rows.html" %}
+    </table>
+  </div>
+</div>
+
+<!-- Add channel -->
+<div class="modal fade" id="channelModal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <form id="channel-form">
+        <div class="modal-header">
+          <h5 class="modal-title">{{ t('Add Channel') }}</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">{{ t('Name') }}</label>
+              <input class="form-control" name="name" required>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">{{ t('Provider') }}</label>
+              <select class="form-select" name="provider_id">
+                <option value="">Manual (URL below)</option>
+                {% for provider in providers %}
+                  <option value="{{ provider.id }}">{{ provider.name }} ({{ provider.type }})</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">{{ t('Provider channel id') }}</label>
+              <input class="form-control" name="provider_ref" placeholder="e.g. 82290">
+              <div class="form-text">{{ t('Passed to the provider unchanged. Leave empty for manual URLs.') }}</div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">{{ t('Source URL (media)') }}</label>
+              <input class="form-control" name="input_url" placeholder="https://origin.example.com/live/sport01/index.m3u8">
+              <div class="form-text">{{ t('A direct media URL: .m3u8, .mpd, .ts, rtmp://, srt://') }}</div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">{{ t('Source endpoint URL') }}</label>
+              <input class="form-control" name="resolve_url" placeholder="https://media.example.com/play?id=82290">
+              <div class="form-text">
+                A page or API that <em>returns</em> the media URL. Fetched fresh on every
+                resolve, so expiring URLs renew themselves. Overrides the provider template.
+              </div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">{{ t('RTMP URL (full)') }}</label>
+              <input class="form-control" name="rtmp_url" placeholder="rtmp://server/live/channel01">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">{{ t('or Stream key') }}</label>
+              <input class="form-control" name="stream_key" placeholder="channel01">
+              <div class="form-text">{{ t('Appended to the default RTMP server from Settings.') }}</div>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">{{ t('Stream mode') }}</label>
+              <select class="form-select" name="stream_mode">
+                <option value="copy" selected>Copy (no re-encode)</option>
+                <option value="transcode">Transcode (H.264 / AAC)</option>
+              </select>
+            </div>
+            <div class="col-md-8 d-flex align-items-end gap-4">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="enabled" checked id="ch-enabled">
+                <label class="form-check-label" for="ch-enabled">{{ t('Enabled') }}</label>
+              </div>
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="auto_start" id="ch-autostart">
+                <label class="form-check-label" for="ch-autostart">{{ t('Auto start') }}</label>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">{{ t('Cancel') }}</button>
+          <button type="submit" class="btn btn-primary">{{ t('Create') }}</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Bulk add: one channel per URL -->
+<div class="modal fade" id="bulkModal" tabindex="-1">
+  <div class="modal-dialog modal-xl modal-dialog-scrollable">
+    <div class="modal-content">
+      <form id="bulk-form">
+        <div class="modal-header">
+          <h5 class="modal-title">{{ t('Bulk add channels') }}</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <p class="text-secondary smaller">
+            One channel per line, or paste a JSON file. A URL ending in
+            <code>.m3u8</code>, <code>.mpd</code>, <code>.ts</code> (or an
+            <code>rtmp://</code>/<code>srt://</code> address) is used directly;
+            anything else is treated as an <strong>endpoint</strong> that is
+            fetched at resolve time to obtain the media URL.
+          </p>
+
+          <div class="row g-3">
+            <div class="col-12">
+              <label class="form-label">{{ t('Channels') }}</label>
+              <textarea class="form-control font-monospace" rows="10" name="text"
+placeholder="Sport Channel 01 | https://media.example.com/play?id=82290 | sport01
+Sport Channel 02 | https://media.example.com/play?id=82291 | sport02
+Test Channel A   | https://origin.example.com/live/testa/index.m3u8
+
+# or bare URLs, one per line
+https://media.example.com/play?id=82292
+
+# or JSON
+[{&quot;name&quot;: &quot;Sport Channel 01&quot;, &quot;url&quot;: &quot;https://media.example.com/play?id=82290&quot;, &quot;stream_key&quot;: &quot;sport01&quot;}]"></textarea>
+              <div class="form-text">
+                Separate columns with <code>|</code>, a tab, a comma or a semicolon:
+                <code>Name | URL | stream key</code>. Lines starting with <code>#</code> are ignored.
+              </div>
+            </div>
+
+            <div class="col-md-4">
+              <label class="form-label">{{ t('Provider') }}</label>
+              <select class="form-select" name="provider_id">
+                <option value="">Manual (no provider)</option>
+                {% for provider in providers %}
+                  <option value="{{ provider.id }}">{{ provider.name }} ({{ provider.type }})</option>
+                {% endfor %}
+              </select>
+              <div class="form-text">{{ t('Endpoint URLs need a provider that fetches them.') }}</div>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">{{ t('Stream key prefix') }}</label>
+              <input class="form-control" name="stream_key_prefix" placeholder="sport">
+              <div class="form-text">{{ t('Fills empty keys: sport01, sport02, ...') }}</div>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">{{ t('Stream mode') }}</label>
+              <select class="form-select" name="stream_mode">
+                <option value="copy" selected>Copy</option>
+                <option value="transcode">Transcode</option>
+              </select>
+            </div>
+            <div class="col-md-2 d-flex align-items-center gap-3 pt-4">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="enabled" checked id="bulk-enabled">
+                <label class="form-check-label" for="bulk-enabled">{{ t('Enabled') }}</label>
+              </div>
+            </div>
+
+            <div class="col-12">
+              <button class="btn btn-sm btn-outline-secondary" type="button" id="bulk-preview">
+                {{ t('Preview') }}
+              </button>
+              <button class="btn btn-sm btn-outline-secondary" type="button" id="bulk-file-btn">
+                {{ t('Load JSON file') }}
+              </button>
+              <input type="file" id="bulk-file" accept="application/json,.json,.txt,.m3u,.csv" hidden>
+            </div>
+
+            <div class="col-12">
+              <div id="bulk-preview-output"></div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">{{ t('Cancel') }}</button>
+          <button type="submit" class="btn btn-primary">{{ t('Create channels') }}</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

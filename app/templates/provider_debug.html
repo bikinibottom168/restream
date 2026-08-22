@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Debug {{ provider.name }} · {{ app_name }}{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb small">
+    <li class="breadcrumb-item"><a href="/providers">Providers</a></li>
+    <li class="breadcrumb-item active">{{ provider.name }}</li>
+  </ol>
+</nav>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div>
+    <h1 class="h4 mb-0">Provider debug</h1>
+    <p class="text-secondary smaller mb-0">
+      Passwords, tokens, cookie values and signed URL parameters are masked in
+      everything shown on this page.
+    </p>
+  </div>
+  <button class="btn btn-primary btn-sm" id="run-debug" data-id="{{ provider.id }}">
+    <i class="bi bi-play-fill"></i> Run diagnostics
+  </button>
+</div>
+
+<div id="debug-output">
+  <div class="card">
+    <div class="card-body text-secondary">
+      Press <strong>Run diagnostics</strong> to authenticate, fetch the channel
+      list and show the parsed result.
+    </div>
+  </div>
+</div>
+{% endblock %}

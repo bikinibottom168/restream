@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Setup · {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-12 col-xl-9">
+    <h1 class="h4 mb-1">First run setup</h1>
+    <p class="text-secondary">
+      Three steps and you are relaying. Everything here can be changed later on
+      the Settings and Providers pages.
+    </p>
+
+    <div class="card mb-3">
+      <div class="card-header">1. Check the environment</div>
+      <div class="card-body">
+        <ul class="list-unstyled mb-3 smaller">
+          <li class="mb-1">
+            <span class="dot {{ 'dot-ok' if ffmpeg.available else 'dot-bad' }}"></span>
+            FFmpeg -
+            {% if ffmpeg.available %}{{ ffmpeg.version }}
+            {% else %}<span class="text-danger">{{ ffmpeg.error or 'FFmpeg Not Installed' }}</span>{% endif %}
+          </li>
+          <li>
+            <span class="dot {{ 'dot-ok' if ffprobe.available else 'dot-bad' }}"></span>
+            ffprobe -
+            {% if ffprobe.available %}{{ ffprobe.version }}
+            {% else %}<span class="text-danger">{{ ffprobe.error or 'ffprobe Not Installed' }}</span>{% endif %}
+          </li>
+        </ul>
+        {% if not ffmpeg.available %}
+          <div class="alert alert-warning smaller mb-0">
+            macOS: <code>brew install ffmpeg</code><br>
+            Windows: install from <code>https://www.gyan.dev/ffmpeg/builds/</code>, then set
+            <code>FFMPEG_PATH</code> in <code>.env</code> to the full path of <code>ffmpeg.exe</code>.
+          </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-header">2. Choose where the streams come from</div>
+      <div class="card-body">
+        {% if providers %}
+          <p class="smaller mb-2">Configured providers:</p>
+          <ul class="smaller">
+            {% for provider in providers %}
+              <li>{{ provider.name }} <span class="text-secondary">({{ provider.type }})</span></li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="smaller">
+            You can skip this entirely and paste a URL per channel (manual mode),
+            or configure a provider that resolves URLs for you - useful when your
+            source hands out short-lived, signed URLs.
+          </p>
+        {% endif %}
+        <a class="btn btn-sm btn-primary" href="/providers">Open Providers</a>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-header">3. Where should the relay send video?</div>
+      <div class="card-body">
+        <form id="setup-form">
+          <div class="row g-3">
+            <div class="col-md-8">
+              <label class="form-label">Default RTMP server</label>
+              <input class="form-control" name="default_rtmp_server"
+                     value="{{ values.default_rtmp_server }}"
+                     placeholder="rtmp://server.example.com/live/">
+              <div class="form-text">Each channel appends its own stream key to this.</div>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Telegram chat id</label>
+              <input class="form-control" name="telegram_chat_id" value="{{ values.telegram_chat_id }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Telegram bot token</label>
+              <input class="form-control" type="password" name="telegram_bot_token"
+                     placeholder="{{ '********' if telegram_token_set else 'optional' }}" autocomplete="off">
+            </div>
+          </div>
+          <div class="d-flex flex-wrap gap-2 mt-3">
+            <button class="btn btn-primary" type="submit">Save and continue</button>
+            <button class="btn btn-outline-primary" type="button" id="telegram-test">Test Telegram</button>
+            <button class="btn btn-outline-primary" type="button" id="ffmpeg-test">Test FFmpeg</button>
+            <button class="btn btn-outline-primary" type="button" id="login-test">Test Provider Login</button>
+          </div>
+          <div id="setup-result" class="smaller mt-3"></div>
+        </form>
+      </div>
+    </div>
+
+    <div class="text-center">
+      <a class="btn btn-link" href="/">Skip to the dashboard</a>
+    </div>
+  </div>
+</div>
+{% endblock %}

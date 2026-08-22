@@ -1,0 +1,29 @@
+# ---- secrets / local configuration ----
+.env
+data/secrets.json
+data/session_state.json
+
+# ---- runtime data ----
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+data/pids/
+logs/
+
+# ---- python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# ---- editors / os ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

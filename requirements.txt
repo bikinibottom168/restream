@@ -1,0 +1,23 @@
+# Restream Manager - runtime dependencies
+# Python 3.11+
+
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+jinja2>=3.1.4
+python-multipart>=0.0.9
+
+httpx>=0.27.0
+sqlalchemy>=2.0.30
+pydantic>=2.7.0
+pydantic-settings>=2.3.0
+python-dotenv>=1.0.1
+psutil>=5.9.8
+aiofiles>=23.2.1
+
+# Optional but recommended: OS keychain storage for secrets
+# (Windows Credential Manager / macOS Keychain)
+keyring>=25.0.0
+
+# ---- development / testing ----
+pytest>=8.2.0
+pytest-asyncio>=0.23.7

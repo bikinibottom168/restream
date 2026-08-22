@@ -1,0 +1,43 @@
+<div class="row g-3" id="summary-cards"
+     hx-get="/partials/summary" hx-trigger="every 5s" hx-swap="outerHTML">
+  <div class="col-6 col-lg">
+    <div class="card stat-card">
+      <div class="card-body">
+        <div class="stat-label">{{ t('Total') }}</div>
+        <div class="stat-value">{{ summary.total }}</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-lg">
+    <div class="card stat-card stat-online">
+      <div class="card-body">
+        <div class="stat-label">{{ t('Online') }}</div>
+        <div class="stat-value">{{ summary.online }}</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-lg">
+    <div class="card stat-card stat-offline">
+      <div class="card-body">
+        <div class="stat-label">{{ t('Offline') }}</div>
+        <div class="stat-value">{{ summary.offline }}</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-lg">
+    <div class="card stat-card stat-reconnecting">
+      <div class="card-body">
+        <div class="stat-label">{{ t('Reconnecting') }}</div>
+        <div class="stat-value">{{ summary.reconnecting }}</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-lg">
+    <div class="card stat-card stat-disabled">
+      <div class="card-body">
+        <div class="stat-label">{{ t('Disabled') }}</div>
+        <div class="stat-value">{{ summary.disabled }}</div>
+      </div>
+    </div>
+  </div>
+</div>

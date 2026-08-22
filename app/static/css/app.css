@@ -1,0 +1,168 @@
+/* Restream Manager - dark dashboard styling on top of Bootstrap 5 */
+
+:root {
+  --rs-online: #2fbf71;
+  --rs-offline: #e5484d;
+  --rs-reconnect: #f5a524;
+  --rs-starting: #3b82f6;
+  --rs-idle: #6b7280;
+}
+
+body {
+  background: radial-gradient(circle at 12% -10%, #16202c 0%, #0d1117 45%, #0b0e13 100%);
+  min-height: 100vh;
+}
+
+.smaller { font-size: 0.82rem; }
+
+/* ---- status pills in the navbar ---- */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.15rem 0.6rem;
+  border: 1px solid var(--bs-border-color);
+  border-radius: 999px;
+  color: var(--bs-secondary-color);
+}
+
+.dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  display: inline-block;
+  background: var(--rs-idle);
+}
+.dot-ok { background: var(--rs-online); box-shadow: 0 0 0 3px rgba(47, 191, 113, 0.15); }
+.dot-bad { background: var(--rs-offline); box-shadow: 0 0 0 3px rgba(229, 72, 77, 0.15); }
+.dot-idle { background: var(--rs-idle); }
+
+/* ---- summary cards ---- */
+.stat-card {
+  border: 1px solid var(--bs-border-color);
+  background: rgba(255, 255, 255, 0.02);
+}
+.stat-card .stat-label {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.7rem;
+  color: var(--bs-secondary-color);
+}
+.stat-card .stat-value {
+  font-size: 1.9rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.stat-online { border-left: 3px solid var(--rs-online); }
+.stat-offline { border-left: 3px solid var(--rs-offline); }
+.stat-reconnecting { border-left: 3px solid var(--rs-reconnect); }
+.stat-disabled { border-left: 3px solid var(--rs-idle); }
+
+/* ---- status badges ---- */
+.badge.status-success { background-color: rgba(47, 191, 113, 0.18); color: #57d99a; }
+.badge.status-danger { background-color: rgba(229, 72, 77, 0.18); color: #ff7b7f; }
+.badge.status-warning { background-color: rgba(245, 165, 36, 0.18); color: #ffc363; }
+.badge.status-orange { background-color: rgba(245, 130, 32, 0.2); color: #ff9d4d; }
+.badge.status-info { background-color: rgba(59, 130, 246, 0.18); color: #7dabff; }
+.badge.status-secondary { background-color: rgba(107, 114, 128, 0.22); color: #b7bec9; }
+.badge.status-config { background-color: rgba(107, 114, 128, 0.22); color: #d2b46a; }
+
+/* ---- tables ---- */
+.table > :not(caption) > * > * { padding: 0.6rem 0.75rem; }
+.channel-logo {
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.channel-logo-lg {
+  width: 52px;
+  height: 52px;
+  object-fit: contain;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.placeholder-logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--bs-secondary-color);
+}
+
+/* ---- small metric tiles ---- */
+.mini-stat, .detail-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--bs-border-color);
+  border-radius: 0.5rem;
+  background: rgba(255, 255, 255, 0.02);
+  height: 100%;
+}
+.mini-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--bs-secondary-color);
+}
+.mini-value { font-size: 1.15rem; font-weight: 600; }
+.mini-stat .progress { height: 4px; margin-top: 0.35rem; }
+.detail-tile .badge { align-self: flex-start; }
+
+/* ---- log viewer ---- */
+.log-view {
+  max-height: 60vh;
+  overflow: auto;
+  padding: 1rem;
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: #c8d1dc;
+  background: #05070a;
+  border-radius: 0 0 0.5rem 0.5rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ---- modals ----
+   Bootstrap lays out .modal-content as a flex column so that .modal-body
+   (flex: 1 1 auto) receives the leftover height and scrolls. Wrapping the
+   header/body/footer in a <form> - which we must do, because the submit
+   button lives in the footer - inserts a plain block element in between and
+   breaks that chain: the body then grows to its full natural height and the
+   dialog cannot be scrolled. Handing the same flex layout to the form
+   restores it. */
+.modal-content > form {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 100%;
+}
+.modal-dialog-scrollable .modal-content > form { overflow: hidden; }
+.modal-dialog-scrollable .modal-body {
+  overflow-y: auto;
+  min-height: 0;
+  -webkit-overflow-scrolling: touch;
+}
+/* Never let a long form push its buttons off the screen. */
+.modal-header, .modal-footer { flex-shrink: 0; }
+
+/* ---- misc ---- */
+.provider-result:empty { display: none; }
+.card { border-color: var(--bs-border-color); }
+.navbar { backdrop-filter: blur(6px); }
+pre.json-preview {
+  background: #05070a;
+  padding: 0.75rem;
+  border-radius: 0.4rem;
+  font-size: 0.75rem;
+  max-height: 260px;
+  overflow: auto;
+}
+
+@media (max-width: 768px) {
+  .stat-card .stat-value { font-size: 1.5rem; }
+  .log-view { font-size: 0.72rem; }
+}

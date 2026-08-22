@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ app_name }}{% endblock %}</title>
+  <!-- Bundled locally: the dashboard works with no internet connection. -->
+  <link href="{{ url_for('static', path='/vendor/bootstrap.min.css') }}" rel="stylesheet">
+  <link href="{{ url_for('static', path='/vendor/bootstrap-icons.min.css') }}" rel="stylesheet">
+  <link href="{{ url_for('static', path='/css/app.css') }}" rel="stylesheet">
+  <script src="{{ url_for('static', path='/vendor/htmx.min.js') }}"></script>
+</head>
+<body>
+
+<nav class="navbar navbar-expand-lg border-bottom border-secondary-subtle sticky-top bg-body-tertiary">
+  <div class="container-fluid">
+    <a class="navbar-brand d-flex align-items-center gap-2" href="/">
+      <i class="bi bi-broadcast text-primary"></i>
+      <span class="fw-semibold">{{ app_name }}</span>
+    </a>
+    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#nav">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+    <div class="collapse navbar-collapse" id="nav">
+      <ul class="navbar-nav me-auto">
+        <li class="nav-item"><a class="nav-link {% if page == 'dashboard' %}active{% endif %}" href="/">{{ t('Dashboard') }}</a></li>
+        <li class="nav-item"><a class="nav-link {% if page == 'providers' %}active{% endif %}" href="/providers">{{ t('Providers') }}</a></li>
+        <li class="nav-item"><a class="nav-link {% if page == 'events' %}active{% endif %}" href="/events">{{ t('Events') }}</a></li>
+        <li class="nav-item"><a class="nav-link {% if page == 'history' %}active{% endif %}" href="/history">{{ t('History') }}</a></li>
+        <li class="nav-item"><a class="nav-link {% if page == 'logs' %}active{% endif %}" href="/logs">{{ t('Logs') }}</a></li>
+        <li class="nav-item"><a class="nav-link {% if page == 'settings' %}active{% endif %}" href="/settings">{{ t('Settings') }}</a></li>
+      </ul>
+      <div class="d-flex align-items-center gap-3 small">
+        <span class="status-pill" title="FFmpeg">
+          <span class="dot {{ 'dot-ok' if ffmpeg_ok else 'dot-bad' }}"></span>
+          FFmpeg {{ t('OK') if ffmpeg_ok else t('MISSING') }}
+        </span>
+        <span class="status-pill" title="Telegram">
+          <span class="dot {{ 'dot-ok' if telegram_ok else 'dot-idle' }}"></span>
+          Telegram {{ t('ON') if telegram_ok else t('OFF') }}
+        </span>
+        <div class="btn-group btn-group-sm" role="group" aria-label="{{ t('Language') }}">
+          {% for code, label in languages.items() %}
+            <button type="button"
+                    class="btn btn-sm {{ 'btn-secondary' if current_language == code else 'btn-outline-secondary' }}"
+                    data-lang="{{ code }}">{{ label }}</button>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+</nav>
+
+{% if startup_errors %}
+<div class="container-fluid pt-3">
+  <div class="alert alert-warning d-flex align-items-start gap-2 mb-0" role="alert">
+    <i class="bi bi-exclamation-triangle-fill mt-1"></i>
+    <div>
+      <strong>{{ t('Startup warnings') }}</strong>
+      <ul class="mb-0 small">
+        {% for error in startup_errors %}<li>{{ error }}</li>{% endfor %}
+      </ul>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<main class="container-fluid py-4">
+  {% block content %}{% endblock %}
+</main>
+
+<footer class="container-fluid py-4 text-center text-secondary small border-top border-secondary-subtle mt-4">
+  {{ app_name }} v{{ app_version }}
+</footer>
+
+<div class="toast-container position-fixed bottom-0 end-0 p-3" id="toasts"></div>
+
+<script src="{{ url_for('static', path='/vendor/bootstrap.bundle.min.js') }}"></script>
+<script src="{{ url_for('static', path='/js/app.js') }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

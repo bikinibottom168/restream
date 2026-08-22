@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Downtime history · {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+  <div>
+    <h1 class="h4 mb-0">{{ t('Downtime history') }}</h1>
+    <p class="text-secondary smaller mb-0">Which channels fail, how often, and for how long.</p>
+  </div>
+  <form class="d-flex gap-2" method="get" action="/history">
+    <select class="form-select form-select-sm" name="channel_id" onchange="this.form.submit()">
+      <option value="">{{ t('All channels') }}</option>
+      {% for channel in channels %}
+        <option value="{{ channel.id }}" {% if selected_channel == channel.id %}selected{% endif %}>
+          {{ channel.name }}
+        </option>
+      {% endfor %}
+    </select>
+  </form>
+</div>
+
+{% if summary %}
+<div class="card mb-3">
+  <div class="card-header">{{ t('Last 7 days') }}</div>
+  <div class="table-responsive">
+    <table class="table table-sm mb-0 smaller">
+      <thead><tr><th>{{ t('Channel') }}</th><th>{{ t('Outages') }}</th><th>{{ t('Total downtime') }}</th></tr></thead>
+      <tbody>
+      {% for row in summary %}
+        <tr>
+          <td>
+            {% if row.channel_id %}
+              <a href="/channels/{{ row.channel_id }}">{{ row.channel_name }}</a>
+            {% else %}{{ row.channel_name or 'deleted channel' }}{% endif %}
+          </td>
+          <td>{{ row.outages }}</td>
+          <td>{{ row.total_seconds | duration }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-sm table-hover mb-0 smaller">
+      <thead>
+        <tr><th>{{ t('Channel') }}</th><th>{{ t('Down at') }}</th><th>{{ t('Recovered at') }}</th><th>{{ t('Downtime') }}</th><th>{{ t('Cause') }}</th><th>{{ t('Attempts') }}</th></tr>
+      </thead>
+      <tbody>
+      {% for record in history %}
+        <tr class="{{ 'table-warning' if not record.recovered_at else '' }}">
+          <td>
+            {% if record.channel_id %}
+              <a href="/channels/{{ record.channel_id }}">{{ record.channel_name }}</a>
+            {% else %}{{ record.channel_name }}{% endif %}
+          </td>
+          <td class="text-nowrap">{{ record.down_at | localtime }}</td>
+          <td class="text-nowrap">{{ record.recovered_at | localtime if record.recovered_at else t('ongoing') }}</td>
+          <td>{{ record.duration }}</td>
+          <td class="text-break">{{ record.cause }}</td>
+          <td>{{ record.attempts }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="text-center text-secondary py-5">{{ t('No outages recorded.') }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

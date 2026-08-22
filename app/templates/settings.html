@@ -1,0 +1,373 @@
+{% extends "base.html" %}
+{% block title %}Settings · {{ app_name }}{% endblock %}
+
+{% block content %}
+<h1 class="h4 mb-3">{{ t('Settings') }}</h1>
+
+<form id="settings-form">
+  <div class="row g-3">
+    <div class="col-12 col-xl-6">
+      <div class="card h-100">
+        <div class="card-header">{{ t('Monitoring') }}</div>
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">Deep source check interval (s)</label>
+              <input class="form-control" type="number" name="check_interval_seconds"
+                     value="{{ values.check_interval_seconds }}" min="30" max="86400">
+              <div class="form-text">🇹🇭 รอบตรวจต้นทางเชิงลึก — ทุกกี่วินาทีจะใช้ ffprobe เช็ก URL ต้นทางซ้ำ</div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">FFmpeg process monitor (s)</label>
+              <input class="form-control" type="number" name="process_monitor_interval_seconds"
+                     value="{{ values.process_monitor_interval_seconds }}" min="1" max="60">
+              <div class="form-text">🇹🇭 รอบเช็กโปรเซส FFmpeg — ถ้า FFmpeg ตายจะจับได้ภายในกี่วินาที</div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Failure threshold</label>
+              <input class="form-control" type="number" name="failure_threshold"
+                     value="{{ values.failure_threshold }}" min="1" max="20">
+              <div class="form-text">🇹🇭 เกณฑ์นับว่าล่ม — เช็กพลาดติดกันกี่ครั้งจึงถือว่าช่องล่ม</div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Stall timeout (s)</label>
+              <input class="form-control" type="number" name="stall_timeout_seconds"
+                     value="{{ values.stall_timeout_seconds }}" min="10" max="3600">
+              <div class="form-text">🇹🇭 หมดเวลาค้าง — ไม่มีความคืบหน้าเกินกี่วินาทีถือว่าภาพค้าง</div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Probe timeout (s)</label>
+              <input class="form-control" type="number" name="probe_timeout_seconds"
+                     value="{{ values.probe_timeout_seconds }}" min="5" max="120">
+              <div class="form-text">🇹🇭 หมดเวลา probe — ffprobe รอต้นทางนานสุดกี่วินาที</div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Source cache TTL (s)</label>
+              <input class="form-control" type="number" name="source_cache_ttl_seconds"
+                     value="{{ values.source_cache_ttl_seconds }}" min="0" max="86400">
+              <div class="form-text">🇹🇭 อายุแคช URL ต้นทาง — 0 = ขอ URL ใหม่ทุกครั้งที่เริ่ม</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12 col-xl-6">
+      <div class="card h-100">
+        <div class="card-header">{{ t('Recovery') }}</div>
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">Max restart delay (s)</label>
+              <input class="form-control" type="number" name="max_restart_delay_seconds"
+                     value="{{ values.max_restart_delay_seconds }}" min="5" max="3600">
+              <div class="form-text">🇹🇭 ดีเลย์รีสตาร์ทสูงสุด — บันไดหน่วงเวลา: 3, 5, 10, 20 แล้วค่านี้</div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Restart window (s)</label>
+              <input class="form-control" type="number" name="restart_window_seconds"
+                     value="{{ values.restart_window_seconds }}" min="60" max="86400">
+              <div class="form-text">🇹🇭 ช่วงเวลาที่ใช้นับจำนวนการรีสตาร์ท (วินาที)</div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Restarts before throttling</label>
+              <input class="form-control" type="number" name="restart_window_threshold"
+                     value="{{ values.restart_window_threshold }}" min="2" max="100">
+              <div class="form-text">🇹🇭 รีสตาร์ทกี่ครั้งจึงถือว่าไม่เสถียร แล้วเริ่มหน่วง</div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Throttled retry delay (s)</label>
+              <input class="form-control" type="number" name="unstable_restart_delay_seconds"
+                     value="{{ values.unstable_restart_delay_seconds }}" min="10" max="3600">
+              <div class="form-text">🇹🇭 ตอนถูกหน่วง (ไม่เสถียร) จะรอกี่วินาทีก่อนลองใหม่</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12 col-xl-6">
+      <div class="card h-100">
+        <div class="card-header">{{ t('Streaming') }}</div>
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-12">
+              <label class="form-label">{{ t('Default RTMP server') }}</label>
+              <input class="form-control" name="default_rtmp_server"
+                     value="{{ values.default_rtmp_server }}" placeholder="rtmp://server.example.com/live/">
+              <div class="form-text">
+                🇹🇭 เซิร์ฟเวอร์ RTMP เริ่มต้น — จะต่อกับ stream key ของแต่ละช่อง (ช่องที่ใส่ URL เต็มจะไม่ใช้ค่านี้)
+              </div>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">{{ t('Default stream mode') }}</label>
+              <select class="form-select" name="default_stream_mode">
+                <option value="copy" {% if values.default_stream_mode == 'copy' %}selected{% endif %}>Copy</option>
+                <option value="transcode" {% if values.default_stream_mode == 'transcode' %}selected{% endif %}>Transcode</option>
+              </select>
+              <div class="form-text">🇹🇭 โหมดเริ่มต้น — Copy (ไม่แปลง เบา CPU) หรือ Transcode (แปลง กิน CPU)</div>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Transcode video bitrate</label>
+              <input class="form-control" name="transcode_video_bitrate" value="{{ values.transcode_video_bitrate }}">
+              <div class="form-text">🇹🇭 บิตเรตวิดีโอตอน transcode</div>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Transcode audio bitrate</label>
+              <input class="form-control" name="transcode_audio_bitrate" value="{{ values.transcode_audio_bitrate }}">
+              <div class="form-text">🇹🇭 บิตเรตเสียงตอน transcode</div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">x264 preset</label>
+              <input class="form-control" name="transcode_preset" value="{{ values.transcode_preset }}">
+              <div class="form-text">🇹🇭 พรีเซ็ต x264 — ยิ่งช้ายิ่งบีบอัดดี (เช่น veryfast, fast, medium)</div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Source User-Agent</label>
+              <input class="form-control" name="source_user_agent" value="{{ values.source_user_agent }}">
+              <div class="form-text">🇹🇭 User-Agent ที่ใช้ตอนดึงต้นทาง</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12 col-xl-6">
+      <div class="card h-100">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span>{{ t('Anti-drop buffer') }}</span>
+          {% if buffer.enabled %}
+            <span class="badge {{ 'text-bg-success' if buffer.running else 'text-bg-danger' }}">
+              {{ t('running') if buffer.running else t('stopped') }}
+            </span>
+          {% else %}
+            <span class="badge text-bg-secondary">{{ t('off') }}</span>
+          {% endif %}
+        </div>
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-12">
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" name="buffer_enabled" id="buffer-enabled"
+                       {% if values.buffer_enabled %}checked{% endif %}>
+                <label class="form-check-label" for="buffer-enabled">
+                  {{ t('Keep viewers connected through source dropouts (MediaMTX)') }}
+                </label>
+              </div>
+              <div class="form-text">
+                {{ t('Viewers watch from a local buffer, so a short source dropout is invisible and the player never disconnects.') }}
+              </div>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">{{ t('Buffer / delay (seconds)') }}</label>
+              <input class="form-control" type="number" name="buffer_seconds" min="0" max="300"
+                     value="{{ values.buffer_seconds }}">
+              <div class="form-text">{{ t('Viewers play this far behind live.') }}</div>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">{{ t('Viewer host / IP') }}</label>
+              <input class="form-control" name="viewer_host" value="{{ values.viewer_host }}"
+                     placeholder="192.168.1.10">
+              <div class="form-text">{{ t('The address players use to reach this machine.') }}</div>
+            </div>
+            <div class="col-md-4 d-flex align-items-end">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="buffer_slate_enabled" id="buffer-slate"
+                       {% if values.buffer_slate_enabled %}checked{% endif %}>
+                <label class="form-check-label" for="buffer-slate">
+                  {{ t('Show a "reconnecting" screen on a long outage') }}
+                </label>
+              </div>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">{{ t('Stop the slate after (seconds)') }}</label>
+              <input class="form-control" type="number" name="slate_max_seconds" min="0" max="86400"
+                     value="{{ values.slate_max_seconds }}">
+              <div class="form-text">🇹🇭 หยุดสเลทเมื่อหลุดนานเกินกี่วินาที (0 = ไม่หยุด) กันเปลือง CPU ตอนหลุดยาว</div>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">{{ t('RTMP port') }}</label>
+              <input class="form-control" type="number" name="mediamtx_rtmp_port" value="{{ values.mediamtx_rtmp_port }}">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">{{ t('HLS port') }}</label>
+              <input class="form-control" type="number" name="mediamtx_hls_port" value="{{ values.mediamtx_hls_port }}">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">{{ t('API port') }}</label>
+              <input class="form-control" type="number" name="mediamtx_api_port" value="{{ values.mediamtx_api_port }}">
+            </div>
+            <div class="col-12">
+              <label class="form-label">{{ t('Reconnecting image (optional)') }}</label>
+              <input class="form-control" name="slate_path" value="{{ values.slate_path }}"
+                     placeholder="/path/to/reconnecting.png">
+              <div class="form-text">{{ t('Shown during a long outage. Leave empty for a plain dark screen.') }}</div>
+            </div>
+            <div class="col-12">
+              <label class="form-label">{{ t('MediaMTX path (optional)') }}</label>
+              <input class="form-control" name="mediamtx_path" value="{{ values.mediamtx_path }}"
+                     placeholder="{{ mediamtx_download.target }}">
+              <div class="form-text {{ 'text-success' if buffer.binary_found else 'text-warning' }}">
+                {% if buffer.binary_found %}
+                  {{ t('MediaMTX found:') }} <code>{{ buffer.binary }}</code>
+                {% else %}
+                  {{ t('MediaMTX not found. Download') }}
+                  <code>{{ mediamtx_download.filename }}</code>
+                  {{ t('and place the binary at') }} <code>{{ mediamtx_download.target }}</code>.
+                {% endif %}
+              </div>
+              {% if buffer.enabled and buffer.last_error %}
+                <div class="form-text text-danger">{{ buffer.last_error }}</div>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12 col-xl-6">
+      <div class="card h-100">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span>{{ t('Start on boot') }}</span>
+          {% if autostart.installed %}
+            <span class="badge text-bg-success" id="autostart-badge">{{ t('on') }}</span>
+          {% else %}
+            <span class="badge text-bg-secondary" id="autostart-badge">{{ t('off') }}</span>
+          {% endif %}
+        </div>
+        <div class="card-body">
+          {% if autostart.supported %}
+            <p class="smaller text-secondary mb-3">
+              {{ t('Starts the app automatically when the computer boots (after login) and restarts it if it ever crashes. No administrator rights needed.') }}
+            </p>
+            <div class="d-flex gap-2 flex-wrap">
+              <button class="btn btn-sm btn-success" type="button" id="autostart-install"
+                      {% if autostart.installed %}disabled{% endif %}>
+                <i class="bi bi-check2-circle"></i> {{ t('Install auto-start') }}
+              </button>
+              <button class="btn btn-sm btn-outline-danger" type="button" id="autostart-remove"
+                      {% if not autostart.installed %}disabled{% endif %}>
+                <i class="bi bi-x-circle"></i> {{ t('Remove auto-start') }}
+              </button>
+            </div>
+            <div id="autostart-result" class="smaller mt-2"></div>
+          {% else %}
+            <p class="smaller text-secondary mb-0">
+              {{ t('Auto-start is available on Windows and macOS.') }}
+              {% if autostart.error %}<br><span class="text-warning">{{ autostart.error }}</span>{% endif %}
+            </p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12 col-xl-6">
+      <div class="card h-100">
+        <div class="card-header">{{ t('Binaries') }}</div>
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">{{ t('FFmpeg path') }}</label>
+              <input class="form-control" name="ffmpeg_path" value="{{ values.ffmpeg_path }}">
+              <div class="form-text">🇹🇭 ตำแหน่งไฟล์ FFmpeg (ตัวแปลง/ส่งสตรีม)</div>
+              <div class="form-text {{ 'text-success' if ffmpeg.available else 'text-danger' }}">
+                {{ ffmpeg.version if ffmpeg.available else (ffmpeg.error or 'FFmpeg Not Installed') }}
+              </div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">{{ t('ffprobe path') }}</label>
+              <input class="form-control" name="ffprobe_path" value="{{ values.ffprobe_path }}">
+              <div class="form-text">🇹🇭 ตำแหน่งไฟล์ ffprobe (ตัวตรวจ/วิเคราะห์ต้นทาง)</div>
+              <div class="form-text {{ 'text-success' if ffprobe.available else 'text-danger' }}">
+                {{ ffprobe.version if ffprobe.available else (ffprobe.error or 'ffprobe Not Installed') }}
+              </div>
+            </div>
+            <div class="col-12">
+              <div class="smaller text-secondary">
+                🇹🇭 ออปชันที่ FFmpeg รองรับ (Detected options):
+                {% for key, value in capabilities.items() %}
+                  {% if key != 'version' %}
+                    <span class="badge {{ 'text-bg-success' if value else 'text-bg-secondary' }}">{{ key }}</span>
+                  {% endif %}
+                {% endfor %}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12 col-xl-6">
+      <div class="card h-100">
+        <div class="card-header">{{ t('Telegram') }}</div>
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">{{ t('Bot token') }}</label>
+              <input class="form-control" type="password" name="telegram_bot_token"
+                     placeholder="{{ '********' if telegram_token_set else 'not set' }}" autocomplete="off">
+              <div class="form-text">🇹🇭 โทเคนบอต Telegram — เก็บใน keychain ({{ secret_backend }}) ไม่แสดงอีก</div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">{{ t('Chat id') }}</label>
+              <input class="form-control" name="telegram_chat_id" value="{{ values.telegram_chat_id }}">
+              <div class="form-text">🇹🇭 รหัสแชตปลายทางที่จะส่งแจ้งเตือนไป</div>
+            </div>
+            <div class="col-12">
+              <button class="btn btn-sm btn-outline-primary" type="button" id="telegram-test">
+                {{ t('Send Test Message') }}
+              </button>
+              <span id="telegram-result" class="smaller ms-2"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12 col-xl-6">
+      <div class="card h-100">
+        <div class="card-header">{{ t('Security & privacy') }}</div>
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">{{ t('Dashboard password') }}</label>
+              <input class="form-control" type="password" name="admin_password" autocomplete="new-password"
+                     placeholder="{{ '********' if auth_enabled else 'no password set' }}">
+              <div class="form-text">
+                🇹🇭 รหัสผ่านแดชบอร์ด — แฮชด้วย PBKDF2 ก่อนเก็บ ตั้ง ADMIN_USERNAME ใน <code>.env</code> เพื่อเปิดล็อกอิน
+              </div>
+            </div>
+            <div class="col-md-6 d-flex align-items-center">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="show_full_source_url" id="show-full"
+                       {% if values.show_full_source_url %}checked{% endif %}>
+                <label class="form-check-label" for="show-full">
+                  🇹🇭 แสดง URL ต้นทางแบบเต็ม (รวมโทเคน) ในแดชบอร์ด
+                </label>
+              </div>
+            </div>
+            <div class="col-12">
+              <div class="smaller text-secondary">
+                Dashboard bound to <code>{{ request.url.hostname }}:{{ request.url.port }}</code>.
+                Keep it on 127.0.0.1 unless you have set a password.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="d-flex flex-wrap gap-2 mt-3">
+    <button class="btn btn-primary" type="submit">{{ t('Save settings') }}</button>
+    <a class="btn btn-outline-secondary" href="/api/config/export" download="restream-config.json">
+      {{ t('Export Configuration') }}
+    </a>
+    <button class="btn btn-outline-secondary" type="button" id="import-btn">{{ t('Import Configuration') }}</button>
+    <input type="file" id="import-file" accept="application/json" hidden>
+  </div>
+  <p class="text-secondary smaller mt-2">
+    Exports contain channels, providers and settings - never passwords, tokens or cookies.
+  </p>
+</form>
+{% endblock %}

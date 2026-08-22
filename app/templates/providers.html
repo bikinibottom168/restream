@@ -1,0 +1,561 @@
+{% extends "base.html" %}
+{% block title %}Providers · {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+  <div>
+    <h1 class="h4 mb-0">{{ t('Providers') }}</h1>
+    <p class="text-secondary smaller mb-0">
+      {{ t('A provider tells the system how to obtain a playable URL for a channel.') }}
+      {{ t('Credentials are stored in the OS keychain, never in the database and never in a log file.') }}
+    </p>
+  </div>
+  <div class="d-flex gap-2">
+    <button class="btn btn-primary btn-sm" data-iptv-new>
+      <i class="bi bi-collection-play"></i> {{ t('Add IPTV source') }}
+    </button>
+    <button class="btn btn-outline-secondary btn-sm" data-provider-new>
+      <i class="bi bi-plus-lg"></i> {{ t('Advanced provider') }}
+    </button>
+  </div>
+</div>
+
+<div class="row g-3">
+{% for provider in providers %}
+  <div class="col-12 col-xl-6">
+    <div class="card h-100">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <div>
+          <span class="fw-semibold">{{ provider.name }}</span>
+          <span class="badge text-bg-secondary ms-1">{{ provider.type }}</span>
+          {% if provider.is_default %}<span class="badge text-bg-primary ms-1">default</span>{% endif %}
+          {% if not provider.enabled %}<span class="badge text-bg-dark ms-1">disabled</span>{% endif %}
+        </div>
+        <div class="d-flex align-items-center gap-2 smaller">
+          <span class="dot {{ 'dot-ok' if provider.last_auth_ok else 'dot-idle' }}"></span>
+          {% if provider.last_auth_at %}
+            checked {{ provider.last_auth_at | localtime('%d/%m %H:%M') }}
+          {% else %}
+            not checked yet
+          {% endif %}
+        </div>
+      </div>
+      <div class="card-body">
+        {% if provider.last_error %}
+          <div class="alert alert-warning py-2 smaller">{{ provider.last_error }}</div>
+        {% endif %}
+        <dl class="row smaller mb-3">
+          <dt class="col-4">{{ t('Base URL') }}</dt>
+          <dd class="col-8 text-break">{{ provider.config.get('base_url', '-') or '-' }}</dd>
+          <dt class="col-4">{{ t('Authentication') }}</dt>
+          <dd class="col-8">{{ provider.config.get('auth', {}).get('type', 'none') }}</dd>
+          <dt class="col-4">{{ t('Credentials') }}</dt>
+          <dd class="col-8">
+            {% for key, present in provider.secrets.items() %}
+              <span class="badge {{ 'text-bg-success' if present else 'text-bg-secondary' }}">
+                {{ key }}{% if present %} ********{% endif %}
+              </span>
+            {% endfor %}
+          </dd>
+          <dt class="col-4">{{ t('Discovery') }}</dt>
+          <dd class="col-8">{{ t('supported') if provider.supports_discovery else t('not available') }}</dd>
+        </dl>
+        <div class="d-flex flex-wrap gap-2">
+          <button class="btn btn-sm btn-outline-primary" data-provider-test="auth" data-id="{{ provider.id }}">
+            {{ t('Test Authentication') }}
+          </button>
+          <button class="btn btn-sm btn-outline-primary" data-provider-test="channels" data-id="{{ provider.id }}">
+            {{ t('Test Channel List') }}
+          </button>
+          <button class="btn btn-sm btn-outline-primary" data-provider-test="resolve" data-id="{{ provider.id }}">
+            {{ t('Test Stream Resolver') }}
+          </button>
+          <button class="btn btn-sm btn-outline-info" data-bulk="sync" data-id="{{ provider.id }}">
+            {{ t('Sync Channels') }}
+          </button>
+          <a class="btn btn-sm btn-outline-secondary" href="/providers/{{ provider.id }}/debug">{{ t('Debug') }}</a>
+          <button class="btn btn-sm btn-outline-secondary" data-provider-edit="{{ provider.id }}">{{ t('Edit') }}</button>
+          <button class="btn btn-sm btn-outline-danger" data-provider-delete="{{ provider.id }}"
+                  data-confirm="Delete provider {{ provider.name }}? Channels using it become manual.">
+            {{ t('Delete') }}
+          </button>
+        </div>
+        <div class="mt-3 provider-result smaller" id="provider-result-{{ provider.id }}"></div>
+      </div>
+    </div>
+  </div>
+{% else %}
+  <div class="col-12">
+    <div class="card">
+      <div class="card-body text-center text-secondary py-4">
+        <p class="mb-2">{{ t('No providers yet.') }}</p>
+        <p class="smaller mb-3">
+          {{ t('Add one to resolve channel URLs automatically, or skip this entirely and paste a URL per channel on the dashboard.') }}
+        </p>
+        <button class="btn btn-primary btn-sm" data-provider-new>{{ t('Add Provider') }}</button>
+      </div>
+    </div>
+  </div>
+{% endfor %}
+</div>
+
+<!-- ------------------------------------------------------------------ -->
+<!-- Worked examples: what a filled-in provider actually looks like      -->
+<!-- ------------------------------------------------------------------ -->
+<h2 class="h6 text-uppercase text-secondary mt-4 mb-2">{{ t('Examples') }}</h2>
+<p class="text-secondary smaller">
+  {{ t('Press Use this example to open the form already filled in, then change the host and the field names to match your source.') }}
+  {{ t('Nothing is saved until you press Save.') }}
+</p>
+
+<div class="row g-3">
+  <div class="col-12 col-xl-6">
+    <div class="card h-100 border-primary-subtle">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <div>
+          <span class="fw-semibold">My Internal TV</span>
+          <span class="badge text-bg-secondary ms-1">http_json</span>
+          <span class="badge text-bg-primary ms-1">EXAMPLE</span>
+        </div>
+        <button class="btn btn-sm btn-outline-primary" data-provider-example="http_json">
+          {{ t('Use this example') }}
+        </button>
+      </div>
+      <div class="card-body">
+        <p class="smaller text-secondary">
+          An API that needs a login and returns a short-lived signed URL for each
+          channel. This is the one to copy when your URLs expire.
+        </p>
+        <table class="table table-sm smaller mb-0">
+          <tbody>
+            <tr><td class="text-secondary" style="width: 45%;">Base URL</td><td><code>https://media.internal.example.com</code></td></tr>
+            <tr><td class="text-secondary">Authentication</td><td><code>form</code></td></tr>
+            <tr><td class="text-secondary">Login URL</td><td><code>/login</code></td></tr>
+            <tr><td class="text-secondary">Username / password field</td><td><code>username</code> / <code>password</code></td></tr>
+            <tr><td class="text-secondary">Channels URL</td><td><code>/api/channels</code></td></tr>
+            <tr><td class="text-secondary">Channels JSON path</td><td><code>data.list</code></td></tr>
+            <tr><td class="text-secondary">Stream resolve URL</td><td><code>/api/play?id={channel_id}</code></td></tr>
+            <tr><td class="text-secondary">Stream URL JSON path</td><td><code>data.stream.url</code></td></tr>
+            <tr><td class="text-secondary">Expiry JSON path</td><td><code>data.expires_at</code></td></tr>
+            <tr><td class="text-secondary">Credentials</td><td>typed into the form, stored in the OS keychain</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card-footer smaller text-secondary">
+        Expects a response shaped like
+        <code>{"data": {"stream": {"url": "https://edge/..../index.m3u8?token=..."}}}</code>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-xl-6">
+    <div class="card h-100 border-primary-subtle">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <div>
+          <span class="fw-semibold">My Origin Server</span>
+          <span class="badge text-bg-secondary ms-1">static_m3u8</span>
+          <span class="badge text-bg-primary ms-1">EXAMPLE</span>
+        </div>
+        <button class="btn btn-sm btn-outline-primary" data-provider-example="static_m3u8">
+          {{ t('Use this example') }}
+        </button>
+      </div>
+      <div class="card-body">
+        <p class="smaller text-secondary">
+          A fixed origin where the URL only differs by channel id, plus an
+          optional playlist so <strong>Sync Channels</strong> can discover them.
+        </p>
+        <table class="table table-sm smaller mb-0">
+          <tbody>
+            <tr><td class="text-secondary" style="width: 45%;">Base URL</td><td><code>https://origin.example.com</code></td></tr>
+            <tr><td class="text-secondary">URL template</td><td><code>/live/{channel_id}/index.m3u8</code></td></tr>
+            <tr><td class="text-secondary">Playlist URL</td><td><code>/playlist.m3u</code></td></tr>
+            <tr><td class="text-secondary">Referer</td><td><code>https://origin.example.com/</code></td></tr>
+            <tr><td class="text-secondary">Playlist cache</td><td><code>900</code> seconds</td></tr>
+          </tbody>
+        </table>
+        <p class="smaller text-secondary mt-3 mb-0">
+          A channel with provider id <code>sport01</code> then resolves to
+          <code>https://origin.example.com/live/sport01/index.m3u8</code>.
+        </p>
+      </div>
+      <div class="card-footer smaller text-secondary">
+        No credentials needed. For a single one-off URL, use the
+        <strong>Manual URL</strong> type instead and paste it on the channel.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= IPTV: the easy form ================= -->
+<div class="modal fade" id="iptvModal" tabindex="-1">
+  <div class="modal-dialog modal-xl modal-dialog-scrollable">
+    <div class="modal-content">
+      <form id="iptv-form">
+        <input type="hidden" name="id">
+        <div class="modal-header">
+          <h5 class="modal-title">{{ t('IPTV source') }}</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">{{ t('Source name') }}</label>
+              <input class="form-control" name="name" placeholder="My IPTV" required>
+            </div>
+            <div class="col-md-6 d-flex align-items-end">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="requires_login" id="iptv-login-toggle">
+                <label class="form-check-label" for="iptv-login-toggle">
+                  {{ t('This source needs a login') }}
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <!-- login section, shown only when the box is ticked -->
+          <div id="iptv-login" class="mt-3" hidden>
+            <h6 class="text-secondary text-uppercase smaller">{{ t('Login') }}</h6>
+            <div class="row g-3">
+              <div class="col-md-6">
+                <label class="form-label">{{ t('Login URL') }}</label>
+                <input class="form-control" name="login_url" placeholder="https://media.example.com/authen">
+                <div class="form-text">{{ t('Where the form SUBMITS to (the action URL), e.g. /authen. The CSRF token is found automatically.') }}</div>
+              </div>
+              <div class="col-md-3">
+                <label class="form-label">{{ t('Username') }}</label>
+                <input class="form-control" name="username" autocomplete="off">
+              </div>
+              <div class="col-md-3">
+                <label class="form-label">{{ t('Password') }}</label>
+                <input class="form-control" type="text" name="password" autocomplete="off"
+                       spellcheck="false" placeholder="{{ t('password') }}">
+              </div>
+              <div class="col-12">
+                <button class="btn btn-sm btn-link p-0" type="button" data-bs-toggle="collapse"
+                        data-bs-target="#iptv-advanced">{{ t('Advanced login options') }}</button>
+                <div class="collapse mt-2" id="iptv-advanced">
+                  <div class="row g-3">
+                    <div class="col-md-4">
+                      <label class="form-label">{{ t('Base URL') }}</label>
+                      <input class="form-control" name="base_url" placeholder="https://media.example.com">
+                    </div>
+                    <div class="col-md-4">
+                      <label class="form-label">{{ t('Username field') }}</label>
+                      <input class="form-control" name="username_field" placeholder="username">
+                    </div>
+                    <div class="col-md-4">
+                      <label class="form-label">{{ t('Password field') }}</label>
+                      <input class="form-control" name="password_field" placeholder="password">
+                    </div>
+                    <div class="col-md-6">
+                      <label class="form-label">{{ t('Page after a successful login') }}</label>
+                      <input class="form-control" name="success_url" placeholder="/main">
+                      <div class="form-text">
+                        {{ t('If login lands here (not back on the login page), it counts as success. e.g. /main') }}
+                      </div>
+                    </div>
+                    <div class="col-md-6">
+                      <label class="form-label">{{ t('Login form page (if different)') }}</label>
+                      <input class="form-control" name="prime_url" placeholder="/">
+                      <div class="form-text">
+                        {{ t('Usually leave empty - the form page (and its CSRF) is found automatically, including the site home page. Only set this to force a specific page.') }}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="col-12">
+                <button class="btn btn-sm btn-outline-primary" type="button" id="iptv-test-login-btn">
+                  <i class="bi bi-box-arrow-in-right"></i> {{ t('Test login') }}
+                </button>
+                <span id="iptv-test-login-out" class="ms-2 smaller align-middle"></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- how to pull the media URL out of the response -->
+          <div class="mt-3">
+            <h6 class="text-secondary text-uppercase smaller">{{ t('Getting the URL from the response') }}</h6>
+            <div class="row g-3">
+              <div class="col-md-6">
+                <label class="form-label">{{ t('Stream URL JSON field (optional)') }}</label>
+                <input class="form-control" name="url_path" placeholder="data.stream.url">
+                <div class="form-text">
+                  {{ t('Which field in the JSON holds the URL, e.g. data.stream.url. Leave empty to search automatically.') }}
+                </div>
+              </div>
+              <div class="col-md-6 d-flex align-items-start">
+                <div class="pt-md-4">
+                  <button class="btn btn-sm btn-outline-primary" type="button" id="iptv-preview-btn">
+                    <i class="bi bi-search"></i> {{ t('Preview the first URL') }}
+                  </button>
+                  <div class="form-text">{{ t('See the response and pick the right field.') }}</div>
+                </div>
+              </div>
+              <div class="col-12">
+                <div id="iptv-preview-out"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- the channel list: one row = one channel -->
+          <div class="d-flex justify-content-between align-items-center mt-4 mb-2">
+            <h6 class="text-secondary text-uppercase smaller mb-0">{{ t('Channels') }}</h6>
+            <span class="smaller text-secondary">{{ t('One URL per channel. Name each one yourself.') }}</span>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-sm align-middle mb-2">
+              <thead>
+                <tr>
+                  <th style="width: 26%;">{{ t('Channel name') }}</th>
+                  <th>URL</th>
+                  <th style="width: 16%;">{{ t('Stream key') }}</th>
+                  <th style="width: 6rem;" class="text-center">{{ t('Test') }}</th>
+                </tr>
+              </thead>
+              <tbody id="iptv-rows"></tbody>
+            </table>
+          </div>
+          <div class="d-flex gap-2">
+            <button class="btn btn-sm btn-outline-primary" type="button" id="iptv-add-row">
+              <i class="bi bi-plus-lg"></i> {{ t('Add row') }}
+            </button>
+            <button class="btn btn-sm btn-outline-secondary" type="button" id="iptv-paste">
+              {{ t('Paste a list') }}
+            </button>
+          </div>
+          <div class="form-text mt-1">
+            {{ t('Example: https://media.example.com/play?id=82290') }}
+          </div>
+
+          <div class="collapse mt-2" id="iptv-paste-box">
+            <textarea class="form-control font-monospace" id="iptv-paste-text" rows="5"
+placeholder="Sport Channel 01 | https://media.example.com/play?id=82290
+Sport Channel 02 | https://media.example.com/play?id=82291"></textarea>
+            <button class="btn btn-sm btn-outline-primary mt-2" type="button" id="iptv-paste-apply">
+              {{ t('Add to the list') }}
+            </button>
+          </div>
+
+          <div id="iptv-result" class="smaller mt-3"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">{{ t('Cancel') }}</button>
+          <button type="submit" class="btn btn-primary">{{ t('Save') }}</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Provider editor -->
+<div class="modal fade" id="providerModal" tabindex="-1">
+  <div class="modal-dialog modal-xl modal-dialog-scrollable">
+    <div class="modal-content">
+      <form id="provider-form">
+        <input type="hidden" name="id">
+        <div class="modal-header">
+          <h5 class="modal-title">{{ t('Provider') }}</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="row g-3 mb-3">
+            <div class="col-md-5">
+              <label class="form-label">{{ t('Provider name') }}</label>
+              <input class="form-control" name="name" placeholder="My Internal TV" required>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">{{ t('Provider type') }}</label>
+              <select class="form-select" name="type" id="provider-type">
+                {% for type in provider_types %}
+                  <option value="{{ type.type }}">{{ type.label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-md-3 d-flex align-items-end gap-3">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="enabled" id="p-enabled" checked>
+                <label class="form-check-label" for="p-enabled">{{ t('Enabled') }}</label>
+              </div>
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="is_default" id="p-default">
+                <label class="form-check-label" for="p-default">{{ t('Default') }}</label>
+              </div>
+            </div>
+          </div>
+
+          <h6 class="text-secondary text-uppercase smaller">{{ t('Credentials') }}</h6>
+          <div class="row g-3 mb-3">
+            <div class="col-md-3">
+              <label class="form-label">{{ t('Username') }}</label>
+              <input class="form-control" name="username" autocomplete="off" placeholder="e.g. operator01">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">{{ t('Password') }}</label>
+              <input class="form-control" type="password" name="password" autocomplete="new-password"
+                     placeholder="********">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">{{ t('API token') }}</label>
+              <input class="form-control" type="password" name="token" autocomplete="off" placeholder="********">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">{{ t('Cookie') }}</label>
+              <input class="form-control" type="password" name="cookie" autocomplete="off" placeholder="********">
+            </div>
+            <div class="col-12">
+              <div class="form-text">
+                {{ t('Leave a field empty to keep the stored value. Stored values are never displayed.') }}
+              </div>
+            </div>
+          </div>
+
+          <div class="d-flex justify-content-between align-items-center">
+            <h6 class="text-secondary text-uppercase smaller mb-0">{{ t('Configuration') }}</h6>
+            <div>
+              <button class="btn btn-sm btn-outline-primary" type="button" id="load-example">
+                {{ t('Fill in the example') }}
+              </button>
+              <button class="btn btn-sm btn-link" type="button" data-bs-toggle="collapse"
+                      data-bs-target="#config-example">{{ t('Show it as text') }}</button>
+            </div>
+          </div>
+
+          <div class="collapse mb-3" id="config-example">
+            <div class="card card-body py-2">
+              <p class="smaller text-secondary mb-2">
+                A source whose API needs a form login and hands out short-lived
+                signed URLs would be filled in like this. Replace the host with
+                your own - the greyed-out text in each field is only a hint and
+                is not saved.
+              </p>
+              <pre class="json-preview mb-0">Base URL              https://media.internal.example.com
+Authentication        form
+Login URL             /login
+Username field        username
+Password field        password
+
+Channels URL          /api/channels
+Channels JSON path    data.list
+Channel id field      id
+Channel name field    name
+
+Stream resolve URL    /api/play?id={channel_id}
+Response parser       auto
+Stream URL JSON path  data.stream.url
+Expiry JSON path      data.expires_at
+
+Playback Referer      https://media.internal.example.com/</pre>
+            </div>
+          </div>
+
+          <div id="provider-fields" class="row g-3"></div>
+
+          <div class="mt-3">
+            <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse"
+                    data-bs-target="#raw-config">{{ t('Edit raw JSON') }}</button>
+            <div class="collapse mt-2" id="raw-config">
+              <textarea class="form-control font-monospace" rows="10" name="config_json"
+                        placeholder='{
+  "base_url": "https://media.internal.example.com",
+  "auth": {"type": "form", "url": "/login"},
+  "channels": {"url": "/api/channels", "list_path": "data"},
+  "stream": {"url": "/api/play?id={channel_id}", "url_path": "data.stream.url"}
+}'></textarea>
+              <div class="form-text">{{ t('Advanced: this overrides the fields above when saved.') }}</div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">{{ t('Cancel') }}</button>
+          <button type="submit" class="btn btn-primary">{{ t('Save provider') }}</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Channel picker for "Test Stream Resolver" -->
+<div class="modal fade" id="resolveModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Test stream resolver</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <label class="form-label">Channel</label>
+        <select class="form-select" id="resolve-channel">
+          {% for channel in channels %}
+            <option value="{{ channel.id }}">{{ channel.name }}</option>
+          {% endfor %}
+        </select>
+        <div id="resolve-output" class="mt-3 smaller"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">{{ t('Close') }}</button>
+        <button type="button" class="btn btn-primary" id="resolve-run">Resolve &amp; probe</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script id="provider-types" type="application/json">{{ provider_types | tojson }}</script>
+<script id="provider-data" type="application/json">{{ providers | tojson }}</script>
+<script id="provider-examples" type="application/json">
+{
+  "http_json": {
+    "name": "My Internal TV",
+    "type": "http_json",
+    "config": {
+      "base_url": "https://media.internal.example.com",
+      "timeout_seconds": 20,
+      "verify_tls": true,
+      "auth": {
+        "type": "form",
+        "url": "/login",
+        "method": "POST",
+        "encoding": "form",
+        "username_field": "username",
+        "password_field": "password"
+      },
+      "channels": {
+        "url": "/api/channels",
+        "list_path": "data.list",
+        "id_field": "id",
+        "name_field": "name",
+        "logo_field": "logo"
+      },
+      "stream": {
+        "url": "/api/play?id={channel_id}",
+        "method": "GET",
+        "parser": "auto",
+        "url_path": "data.stream.url",
+        "expires_path": "data.expires_at",
+        "forward_cookies": true
+      },
+      "referer": "https://media.internal.example.com/",
+      "user_agent": "Mozilla/5.0 (compatible; RestreamManager/1.0)"
+    }
+  },
+  "static_m3u8": {
+    "name": "My Origin Server",
+    "type": "static_m3u8",
+    "config": {
+      "base_url": "https://origin.example.com",
+      "url_template": "/live/{channel_id}/index.m3u8",
+      "playlist_url": "https://origin.example.com/playlist.m3u",
+      "referer": "https://origin.example.com/",
+      "user_agent": "Mozilla/5.0 (compatible; RestreamManager/1.0)",
+      "cache_ttl_seconds": 900
+    }
+  },
+  "manual": {
+    "name": "Pasted URLs",
+    "type": "manual",
+    "config": {}
+  }
+}
+</script>
+{% endblock %}

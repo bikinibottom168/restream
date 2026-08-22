@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Logs · {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+  <div>
+    <h1 class="h4 mb-0">{{ t('Logs') }}</h1>
+    <p class="text-secondary smaller mb-0">
+      Only the tail of each file is read - large logs are never loaded into memory.
+    </p>
+  </div>
+  <form class="d-flex flex-wrap gap-2" method="get" action="/logs">
+    <select class="form-select form-select-sm" name="source" style="width: auto;">
+      <option value="application" {% if source == 'application' %}selected{% endif %}>{{ t('Application') }}</option>
+      <option value="channel" {% if source == 'channel' %}selected{% endif %}>{{ t('Channel') }}</option>
+    </select>
+    <select class="form-select form-select-sm" name="channel_id" style="width: auto;">
+      <option value="">{{ t('Select channel') }}</option>
+      {% for channel in channels %}
+        <option value="{{ channel.id }}" {% if selected_channel == channel.id %}selected{% endif %}>
+          {{ channel.name }}
+        </option>
+      {% endfor %}
+    </select>
+    <select class="form-select form-select-sm" name="lines" style="width: auto;">
+      {% for option in [100, 200, 500, 1000] %}
+        <option value="{{ option }}" {% if lines == option %}selected{% endif %}>{{ option }} {{ t('lines') }}</option>
+      {% endfor %}
+    </select>
+    <button class="btn btn-sm btn-outline-secondary" type="submit">{{ t('Show') }}</button>
+  </form>
+</div>
+
+<div class="card">
+  <pre class="log-view mb-0">{% for line in log_lines %}{{ line }}
+{% else %}{{ t('Nothing logged yet.') }}{% endfor %}</pre>
+</div>
+{% endblock %}

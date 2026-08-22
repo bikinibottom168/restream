@@ -1,0 +1,233 @@
+{% extends "base.html" %}
+{% block title %}{{ channel.name }} · {{ app_name }}{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb small">
+    <li class="breadcrumb-item"><a href="/">{{ t('Dashboard') }}</a></li>
+    <li class="breadcrumb-item active">{{ channel.name }}</li>
+  </ol>
+</nav>
+
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+  <div class="d-flex align-items-center gap-3">
+    {% if channel.logo_url %}<img src="{{ channel.logo_url }}" alt="" class="channel-logo-lg">{% endif %}
+    <div>
+      <h1 class="h4 mb-0">{{ channel.name }}</h1>
+      <div class="text-secondary smaller">
+        Channel #{{ channel.id }}
+        {% if channel.provider_ref %} · provider id {{ channel.provider_ref }}{% endif %}
+        {% if channel.group_title %} · {{ channel.group_title }}{% endif %}
+      </div>
+    </div>
+  </div>
+  <div class="d-flex flex-wrap gap-2" data-channel-id="{{ channel.id }}">
+    <button class="btn btn-sm btn-outline-success" data-action="start" data-id="{{ channel.id }}">{{ t('Start') }}</button>
+    <button class="btn btn-sm btn-outline-danger" data-action="stop" data-id="{{ channel.id }}">{{ t('Stop') }}</button>
+    <button class="btn btn-sm btn-outline-warning" data-action="restart" data-id="{{ channel.id }}">{{ t('Restart') }}</button>
+    <button class="btn btn-sm btn-outline-info" data-action="refresh" data-id="{{ channel.id }}">{{ t('Refresh Source') }}</button>
+    <button class="btn btn-sm btn-outline-primary" data-action="test" data-id="{{ channel.id }}">{{ t('Test Source') }}</button>
+    {% if channel.enabled %}
+      <button class="btn btn-sm btn-outline-secondary" data-action="disable" data-id="{{ channel.id }}">{{ t('Disable') }}</button>
+    {% else %}
+      <button class="btn btn-sm btn-outline-secondary" data-action="enable" data-id="{{ channel.id }}">{{ t('Enable') }}</button>
+    {% endif %}
+    <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#editModal">{{ t('Edit') }}</button>
+    <button class="btn btn-sm btn-outline-danger" data-action="delete" data-id="{{ channel.id }}"
+            data-confirm="Delete {{ channel.name }}? This cannot be undone.">{{ t('Delete') }}</button>
+  </div>
+</div>
+
+<div id="test-result"></div>
+
+{% include "partials/channel_detail.html" %}
+
+<div class="row g-3 mt-1">
+  <div class="col-lg-6">
+    <div class="card h-100">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span>{{ t('Recent events') }}</span>
+        <a class="small" href="/events?channel_id={{ channel.id }}">{{ t('All events') }}</a>
+      </div>
+      <div class="table-responsive" style="max-height: 320px; overflow-y: auto;">
+        <table class="table table-sm mb-0 smaller">
+          <tbody>
+          {% for event in events %}
+            <tr>
+              <td class="text-secondary text-nowrap">{{ event.created_at | localtime('%d/%m %H:%M:%S') }}</td>
+              <td><span class="badge text-bg-secondary">{{ event.event_type }}</span></td>
+              <td>{{ event.message }}</td>
+            </tr>
+          {% else %}
+            <tr><td class="text-secondary p-3">No events yet.</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-6">
+    <div class="card h-100">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span>{{ t('Downtime history') }}</span>
+        <a class="small" href="/history?channel_id={{ channel.id }}">{{ t('Full history') }}</a>
+      </div>
+      <div class="table-responsive" style="max-height: 320px; overflow-y: auto;">
+        <table class="table table-sm mb-0 smaller">
+          <thead><tr><th>{{ t('Down at') }}</th><th>{{ t('Recovered at') }}</th><th>{{ t('Downtime') }}</th><th>{{ t('Attempts') }}</th></tr></thead>
+          <tbody>
+          {% for record in history %}
+            <tr>
+              <td class="text-nowrap">{{ record.down_at | localtime('%d/%m %H:%M') }}</td>
+              <td class="text-nowrap">{{ record.recovered_at | localtime('%d/%m %H:%M') if record.recovered_at else '-' }}</td>
+              <td>{{ record.duration }}</td>
+              <td>{{ record.attempts }}</td>
+            </tr>
+          {% else %}
+            <tr><td colspan="4" class="text-secondary p-3">No outages recorded.</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% if viewer_urls %}
+<div class="card mt-3 border-success">
+  <div class="card-header">{{ t('Watch links (buffered)') }}</div>
+  <div class="card-body">
+    <div class="row g-2 align-items-center">
+      <div class="col-auto"><span class="badge text-bg-success">HLS</span></div>
+      <div class="col">
+        <input class="form-control form-control-sm font-monospace" readonly
+               value="{{ viewer_urls.hls }}" onclick="this.select()">
+      </div>
+      <div class="col-12 col-md-auto">
+        <span class="smaller text-secondary">{{ t('Best for staying connected through dropouts.') }}</span>
+      </div>
+      <div class="col-auto"><span class="badge text-bg-secondary">RTMP</span></div>
+      <div class="col">
+        <input class="form-control form-control-sm font-monospace" readonly
+               value="{{ viewer_urls.rtmp }}" onclick="this.select()">
+      </div>
+    </div>
+    <div class="form-text mt-2">
+      {{ t('Point VLC at the HLS link. It keeps playing from the buffer even while the source reconnects.') }}
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<div class="card mt-3">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span>{{ t('FFmpeg log (tail)') }}</span>
+    <a class="small" href="/logs?source=channel&channel_id={{ channel.id }}">{{ t('Open log viewer') }}</a>
+  </div>
+  <pre class="log-view mb-0">{% for line in log_lines %}{{ line }}
+{% else %}No FFmpeg output yet.{% endfor %}</pre>
+</div>
+
+<!-- Edit channel -->
+<div class="modal fade" id="editModal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <form id="channel-edit-form" data-id="{{ channel.id }}">
+        <div class="modal-header">
+          <h5 class="modal-title">{{ t('Edit') }}</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">{{ t('Name') }}</label>
+              <input class="form-control" name="name" value="{{ raw.name }}" required>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">{{ t('Provider') }}</label>
+              <select class="form-select" name="provider_id">
+                <option value="">Manual (URL below)</option>
+                {% for provider in providers %}
+                  <option value="{{ provider.id }}" {% if raw.provider_id == provider.id %}selected{% endif %}>
+                    {{ provider.name }} ({{ provider.type }})
+                  </option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Provider channel id</label>
+              <input class="form-control" name="provider_ref" value="{{ raw.provider_ref }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">{{ t('Source URL (media)') }}</label>
+              <input class="form-control" name="input_url" value="{{ raw.input_url }}"
+                     placeholder="https://origin.example.com/live/sport01/index.m3u8">
+              <div class="form-text">{{ t('Direct media URL, used as-is.') }}</div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">{{ t('Source endpoint URL') }}</label>
+              <input class="form-control" name="resolve_url" value="{{ raw.resolve_url }}"
+                     placeholder="https://media.example.com/play?id=82290">
+              <div class="form-text">
+                Page or API returning the media URL. Re-fetched on every refresh,
+                and overrides the provider's URL template.
+              </div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">{{ t('RTMP URL (full)') }}</label>
+              <input class="form-control" name="rtmp_url" value="{{ raw.rtmp_url }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">{{ t('Stream key') }}</label>
+              <input class="form-control" name="stream_key" value="{{ raw.stream_key }}">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">{{ t('Stream mode') }}</label>
+              <select class="form-select" name="stream_mode">
+                <option value="copy" {% if raw.stream_mode == 'copy' %}selected{% endif %}>Copy</option>
+                <option value="transcode" {% if raw.stream_mode == 'transcode' %}selected{% endif %}>Transcode</option>
+              </select>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">{{ t('Logo URL') }}</label>
+              <input class="form-control" name="logo_url" value="{{ raw.logo_url }}">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">{{ t('Group') }}</label>
+              <input class="form-control" name="group_title" value="{{ raw.group_title }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">{{ t('Playback Referer') }}</label>
+              <input class="form-control" name="playback_referer" value="{{ raw.playback_referer }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">{{ t('Playback User-Agent') }}</label>
+              <input class="form-control" name="playback_user_agent" value="{{ raw.playback_user_agent }}">
+            </div>
+            <div class="col-12">
+              <label class="form-label">Playback headers (JSON)</label>
+              <textarea class="form-control font-monospace" rows="3" name="playback_headers_json">{{ raw.playback_headers_json }}</textarea>
+              <div class="form-text">Sent to FFmpeg with the source request. Masked in logs.</div>
+            </div>
+            <div class="col-12 d-flex gap-4">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="enabled" id="edit-enabled" {% if raw.enabled %}checked{% endif %}>
+                <label class="form-check-label" for="edit-enabled">{{ t('Enabled') }}</label>
+              </div>
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="auto_start" id="edit-autostart" {% if raw.auto_start %}checked{% endif %}>
+                <label class="form-check-label" for="edit-autostart">{{ t('Auto start') }}</label>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">{{ t('Cancel') }}</button>
+          <button type="submit" class="btn btn-primary">{{ t('Save') }}</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

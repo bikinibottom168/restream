@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Events · {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+  <h1 class="h4 mb-0">{{ t('Events') }}</h1>
+  <form class="d-flex gap-2" method="get" action="/events">
+    <select class="form-select form-select-sm" name="channel_id" onchange="this.form.submit()">
+      <option value="">{{ t('All channels') }}</option>
+      {% for channel in channels %}
+        <option value="{{ channel.id }}" {% if selected_channel == channel.id %}selected{% endif %}>
+          {{ channel.name }}
+        </option>
+      {% endfor %}
+    </select>
+  </form>
+</div>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-sm table-hover mb-0 smaller">
+      <thead>
+        <tr><th>{{ t('Time') }}</th><th>{{ t('Channel') }}</th><th>{{ t('Event') }}</th><th>{{ t('Message') }}</th></tr>
+      </thead>
+      <tbody>
+      {% for event in events %}
+        <tr class="{{ 'table-danger' if event.level == 'error' else ('table-warning' if event.level == 'warning' else '') }}">
+          <td class="text-nowrap">{{ event.created_at | localtime }}</td>
+          <td>
+            {% if event.channel_id %}
+              <a href="/channels/{{ event.channel_id }}">{{ event.channel_name or event.channel_id }}</a>
+            {% else %}<span class="text-secondary">system</span>{% endif %}
+          </td>
+          <td><span class="badge text-bg-secondary">{{ event.event_type }}</span></td>
+          <td>{{ event.message }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4" class="text-center text-secondary py-5">{{ t('No events recorded yet.') }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

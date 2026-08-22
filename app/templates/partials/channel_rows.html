@@ -1,0 +1,79 @@
+<tbody id="channel-rows"
+       hx-get="/partials/channels?status={{ request.query_params.get('status', 'all') }}&q={{ request.query_params.get('q', '') }}"
+       hx-trigger="every 4s" hx-swap="outerHTML">
+{% for channel in channels %}
+  <tr>
+    <td>
+      <input class="form-check-input row-select" type="checkbox" value="{{ channel.id }}"
+             aria-label="Select {{ channel.name }}">
+    </td>
+    <td>
+      <div class="d-flex align-items-center gap-2">
+        {% if channel.logo_url %}
+          <img src="{{ channel.logo_url }}" alt="" class="channel-logo" loading="lazy">
+        {% else %}
+          <span class="channel-logo placeholder-logo"><i class="bi bi-tv"></i></span>
+        {% endif %}
+        <div>
+          <a href="/channels/{{ channel.id }}" class="fw-semibold text-body text-decoration-none">{{ channel.name }}</a>
+          <div class="text-secondary smaller">
+            {{ channel.provider_name or 'no provider' }}
+            {% if channel.provider_ref %}<span class="text-secondary">· {{ channel.provider_ref }}</span>{% endif %}
+            {% if not channel.source_present %}
+              <span class="badge text-bg-warning ms-1">SOURCE REMOVED</span>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </td>
+    <td>
+      <span class="badge status-{{ channel.status_badge }}">{{ channel.status }}</span>
+      {% if channel.unstable %}<span class="badge text-bg-warning ms-1" title="Restarting too often">UNSTABLE</span>{% endif %}
+    </td>
+    <td class="smaller text-secondary text-truncate" style="max-width: 240px;"
+        title="{{ channel.source_url_short }}">
+      {% if channel.source_url_short %}{{ channel.source_url_short }}{% else %}<span class="text-secondary">-</span>{% endif %}
+    </td>
+    <td class="smaller">
+      {% if channel.rtmp_configured %}
+        <span class="text-secondary">{{ channel.rtmp_url | short_url }}</span>
+      {% else %}
+        <span class="badge text-bg-secondary">CONFIG REQUIRED</span>
+      {% endif %}
+    </td>
+    <td class="smaller">{{ channel.uptime }}</td>
+    <td class="smaller">
+      {% if channel.bitrate %}<span class="text-info">{{ channel.bitrate }}</span>{% else %}-{% endif %}
+      {% if channel.speed %}<span class="text-secondary ms-1">{{ channel.speed }}</span>{% endif %}
+    </td>
+    <td class="smaller">{{ channel.last_check_age }}</td>
+    <td class="smaller">{{ channel.restart_count }}</td>
+    <td class="text-nowrap">
+      <div class="btn-group btn-group-sm">
+        <button class="btn btn-outline-success" data-action="start" data-id="{{ channel.id }}" title="{{ t('Start') }}">
+          <i class="bi bi-play-fill"></i>
+        </button>
+        <button class="btn btn-outline-danger" data-action="stop" data-id="{{ channel.id }}" title="{{ t('Stop') }}">
+          <i class="bi bi-stop-fill"></i>
+        </button>
+        <button class="btn btn-outline-warning" data-action="restart" data-id="{{ channel.id }}" title="{{ t('Restart') }}">
+          <i class="bi bi-arrow-clockwise"></i>
+        </button>
+        <button class="btn btn-outline-info" data-action="refresh" data-id="{{ channel.id }}" title="{{ t('Refresh source') }}">
+          <i class="bi bi-link-45deg"></i>
+        </button>
+        <a class="btn btn-outline-secondary" href="/channels/{{ channel.id }}" title="{{ t('Details') }}">
+          <i class="bi bi-list-ul"></i>
+        </a>
+      </div>
+    </td>
+  </tr>
+{% else %}
+  <tr>
+    <td colspan="10" class="text-center text-secondary py-5">
+      {{ t('No channels match this filter.') }}
+      <a href="/providers" class="ms-1">{{ t('Configure a provider') }}</a> or add a channel manually.
+    </td>
+  </tr>
+{% endfor %}
+</tbody>

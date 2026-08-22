@@ -1,0 +1,141 @@
+# Rename this file to "my_provider.py" (drop the .txt) to activate it.
+#
+# It is shipped inert so the example never shows up in your provider list
+# unless you actually want it.
+
+"""Example custom provider.
+
+Resolves a channel by asking an internal service for a signed URL:
+
+    GET https://media.internal.example/v2/playback/{channel_id}
+    -> {"playback": {"hls": "https://edge/..../index.m3u8?sig=...", "ttl": 600}}
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+import httpx
+
+from app.providers.base import (
+    ChannelInfo,
+    ProviderAuthError,
+    ProviderHealth,
+    ProviderUnavailable,
+    ResolvedStream,
+    StreamProvider,
+)
+
+
+class MyProvider(StreamProvider):
+    # Stored in providers.type - must be unique.
+    type_name = "my_provider"
+    label = "My internal service"
+    supports_discovery = True
+    supports_auth = True
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._client: httpx.AsyncClient | None = None
+
+    # ---- lifecycle -------------------------------------------------------
+    async def start(self) -> None:
+        self._client = httpx.AsyncClient(
+            base_url=str(self.option("base_url", "")),
+            timeout=httpx.Timeout(20.0),
+            follow_redirects=True,
+        )
+
+    async def aclose(self) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
+
+    # ---- the five methods ------------------------------------------------
+    async def authenticate(self) -> bool:
+        """Exchange the stored API key for a session token."""
+        api_key = self.secret("token")
+        if not api_key:
+            raise ProviderAuthError("no API token configured for this provider")
+        self._client.headers["Authorization"] = f"Bearer {api_key}"
+        self._authenticated = True
+        return True
+
+    async def list_channels(self) -> list[ChannelInfo]:
+        if not self._authenticated:
+            await self.authenticate()
+        response = await self._client.get("/v2/channels")
+        if response.status_code in (401, 403):
+            raise ProviderAuthError("channel list rejected the session")
+        response.raise_for_status()
+        return [
+            ChannelInfo(
+                id=str(row["id"]),
+                name=row["title"],
+                logo=row.get("logo", ""),
+                metadata={"group_title": row.get("category", "")},
+            )
+            for row in response.json()["channels"]
+        ]
+
+    async def resolve_stream(self, channel: ChannelInfo) -> ResolvedStream:
+        if not self._authenticated:
+            await self.authenticate()
+
+        response = await self._client.get(f"/v2/playback/{channel.id}")
+        if response.status_code in (401, 403):
+            # Let the caller know the session died; the supervisor will retry
+            # this channel only - other channels keep running.
+            raise ProviderAuthError("playback request was not authorised")
+        if response.status_code >= 400:
+            raise ProviderUnavailable(f"playback endpoint returned {response.status_code}")
+
+        payload = response.json()
+        url = payload.get("playback", {}).get("hls")
+        if not url:
+            raise ProviderUnavailable("no HLS URL in the playback response")
+
+        ttl = int(payload.get("playback", {}).get("ttl", 0) or 0)
+        expires_at = (
+            datetime.now(timezone.utc) + timedelta(seconds=ttl) if ttl else None
+        )
+
+        return ResolvedStream(
+            channel_id=channel.id,
+            url=url,
+            headers={},                       # extra headers FFmpeg must send
+            cookies={},                       # or a cookie jar
+            referer=str(self.option("referer", "")),
+            user_agent=str(self.option("user_agent", "")),
+            expires_at=expires_at,            # drives proactive re-resolution
+            provider=self.type_name,
+        )
+
+    async def refresh_stream(self, channel: ChannelInfo) -> ResolvedStream:
+        """Called when the current URL stops working. Never reuse a cache here."""
+        return await self.resolve_stream(channel)
+
+    async def health(self) -> ProviderHealth:
+        try:
+            channels = await self.list_channels()
+        except ProviderAuthError as exc:
+            return ProviderHealth(ok=False, message=str(exc))
+        except Exception as exc:  # noqa: BLE001
+            return ProviderHealth(ok=False, message=str(exc))
+        return ProviderHealth(
+            ok=True,
+            message=f"{len(channels)} channels available",
+            authenticated=True,
+            channel_count=len(channels),
+        )
+
+    # ---- dashboard form --------------------------------------------------
+    @staticmethod
+    def config_schema() -> list[dict[str, Any]]:
+        """Fields rendered on the provider page. Optional but recommended."""
+        return [
+            {"key": "base_url", "label": "Base URL", "type": "url", "required": True},
+            {"key": "referer", "label": "Playback Referer", "type": "text"},
+            {"key": "user_agent", "label": "User-Agent", "type": "text"},
+        ]

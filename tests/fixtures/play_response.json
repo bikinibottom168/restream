@@ -1,0 +1,16 @@
+{
+  "code": 0,
+  "msg": "ok",
+  "data": {
+    "channel": {
+      "id": "82290",
+      "name": "Sport Channel 01"
+    },
+    "stream": {
+      "type": "hls",
+      "url": "https:\/\/edge-07.media.example\/live\/sport01\/index.m3u8?token=abc123def456&expires=1924992000",
+      "backup": "https://edge-08.media.example/live/sport01/index.m3u8"
+    },
+    "expires_at": 1924992000
+  }
+}

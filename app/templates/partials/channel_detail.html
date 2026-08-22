@@ -1,0 +1,110 @@
+<div id="channel-detail"
+     hx-get="/partials/channel/{{ channel.id }}" hx-trigger="every 4s" hx-swap="outerHTML">
+  <div class="row g-3">
+    <div class="col-md-6 col-xl-3">
+      <div class="detail-tile">
+        <span class="mini-label">{{ t('Status') }}</span>
+        <span class="badge status-{{ channel.status_badge }} fs-6">{{ channel.status }}</span>
+        {% if channel.unstable %}<span class="badge text-bg-warning">UNSTABLE</span>{% endif %}
+      </div>
+    </div>
+    <div class="col-md-6 col-xl-3">
+      <div class="detail-tile">
+        <span class="mini-label">{{ t('Uptime') }}</span>
+        <span class="mini-value">{{ channel.uptime }}</span>
+      </div>
+    </div>
+    <div class="col-md-6 col-xl-3">
+      <div class="detail-tile">
+        <span class="mini-label">{{ t('FFmpeg PID') }}</span>
+        <span class="mini-value">{{ channel.ffmpeg_pid or '-' }}</span>
+      </div>
+    </div>
+    <div class="col-md-6 col-xl-3">
+      <div class="detail-tile">
+        <span class="mini-label">{{ t('Restarts') }}</span>
+        <span class="mini-value">{{ channel.restart_count }}
+          <span class="smaller text-secondary">({{ channel.restarts_in_window }} recent)</span>
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-3 mt-1">
+    <div class="col-md-6">
+      <div class="card h-100">
+        <div class="card-header">{{ t('Input') }}</div>
+        <div class="card-body">
+          <dl class="row mb-0 smaller">
+            <dt class="col-5">{{ t('Provider') }}</dt>
+            <dd class="col-7">{{ channel.provider_name or 'Manual' }}</dd>
+            <dt class="col-5">{{ t('Provider channel id') }}</dt>
+            <dd class="col-7">{{ channel.provider_ref or '-' }}</dd>
+            {% if channel.resolve_url %}
+            <dt class="col-5">{{ t('Endpoint URL') }}</dt>
+            <dd class="col-7 text-break">{{ channel.resolve_url }}</dd>
+            {% endif %}
+            <dt class="col-5">{{ t('Current source') }}</dt>
+            <dd class="col-7">
+              <span class="text-break">{{ channel.source_url or '-' }}</span>
+              {% if channel.source_url %}
+                <button class="btn btn-sm btn-link p-0 ms-1" data-copy="{{ channel.source_url }}">{{ t('Copy') }}</button>
+              {% endif %}
+            </dd>
+            <dt class="col-5">{{ t('Last refresh') }}</dt>
+            <dd class="col-7">{{ channel.source_age }} ago</dd>
+            <dt class="col-5">{{ t('Expires') }}</dt>
+            <dd class="col-7">{{ channel.source_expires_at or 'not signalled' }}</dd>
+            <dt class="col-5">{{ t('Resolve count') }}</dt>
+            <dd class="col-7">{{ channel.resolve_count }}</dd>
+            <dt class="col-5">{{ t('Source status') }}</dt>
+            <dd class="col-7">
+              {% if channel.probe and channel.probe.ok %}
+                <span class="text-success">{{ channel.probe.summary }}</span>
+              {% elif channel.resolve_error %}
+                <span class="text-danger">{{ channel.resolve_error }}</span>
+              {% else %}-{% endif %}
+            </dd>
+          </dl>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="card h-100">
+        <div class="card-header">{{ t('Output') }}</div>
+        <div class="card-body">
+          <dl class="row mb-0 smaller">
+            <dt class="col-5">{{ t('RTMP destination') }}</dt>
+            <dd class="col-7 text-break">{{ channel.rtmp_url or t('not configured') }}</dd>
+            <dt class="col-5">{{ t('Mode') }}</dt>
+            <dd class="col-7">{{ channel.stream_mode }}</dd>
+            <dt class="col-5">{{ t('FFmpeg status') }}</dt>
+            <dd class="col-7">{{ t('running') if channel.ffmpeg_running else t('stopped') }}</dd>
+            <dt class="col-5">{{ t('Output time') }}</dt>
+            <dd class="col-7">{{ channel.out_time or '-' }}</dd>
+            <dt class="col-5">{{ t('Bitrate') }}</dt>
+            <dd class="col-7">{{ channel.bitrate or '-' }}</dd>
+            <dt class="col-5">{{ t('Speed') }}</dt>
+            <dd class="col-7">{{ channel.speed or '-' }}</dd>
+            <dt class="col-5">{{ t('Last progress') }}</dt>
+            <dd class="col-7">
+              {% if channel.seconds_since_progress is not none %}
+                {{ channel.seconds_since_progress }}s ago
+              {% else %}-{% endif %}
+            </dd>
+            <dt class="col-5">{{ t('Started') }}</dt>
+            <dd class="col-7">{{ channel.started_at or '-' }}</dd>
+            <dt class="col-5">{{ t('Last check') }}</dt>
+            <dd class="col-7">{{ channel.last_check_age }} ago</dd>
+          </dl>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% if channel.last_error %}
+    <div class="alert alert-danger mt-3 mb-0 smaller">
+      <strong>{{ t('Last error:') }}</strong> {{ channel.last_error }}
+    </div>
+  {% endif %}
+</div>

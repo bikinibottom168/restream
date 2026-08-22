@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Player - Sport Channel 01</title></head>
+<body>
+  <div id="player-wrap">
+    <div id="player" data-channel="82290"></div>
+  </div>
+  <script>
+    // The URL arrives JSON-escaped inside a JavaScript blob, which is exactly
+    // the shape extract_stream_urls() has to cope with.
+    var playerConfig = {
+      "title": "Sport Channel 01",
+      "poster": "/static/img/sport01.png",
+      "sources": [
+        {"file": "https:\/\/edge-07.media.example\/live\/sport01\/index.m3u8?token=abc123&amp;expires=1924992000", "type": "hls"}
+      ]
+    };
+    jwplayer("player").setup(playerConfig);
+  </script>
+  <iframe src="https://embed.media.example/player?id=82290" allowfullscreen></iframe>
+</body>
+</html>
