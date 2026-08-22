@@ -213,6 +213,7 @@ THAI: dict[str, str] = {
     "Advanced login options": "ตัวเลือกล็อกอินเพิ่มเติม",
     "Test login": "ทดสอบล็อกอิน",
     "Anti-drop buffer": "บัฟเฟอร์กันหลุด",
+    "MediaMTX log": "บันทึก MediaMTX",
     "Start on boot": "เปิดอัตโนมัติเมื่อเปิดเครื่อง",
     "on": "เปิด",
     "Starts the app automatically when the computer boots (after login) and restarts it if it ever crashes. No administrator rights needed.": "เปิดโปรแกรมอัตโนมัติเมื่อเปิดเครื่อง (หลังล็อกอิน) และรีสตาร์ทให้เองถ้าโปรแกรมหลุด ไม่ต้องใช้สิทธิ์ admin",

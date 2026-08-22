@@ -18,40 +18,56 @@ set ARCH=amd64
 if /I "%PROCESSOR_ARCHITECTURE%"=="ARM64" set ARCH=arm64
 
 REM ---- 1. Python ------------------------------------------------------------
-where python >nul 2>&1
-if errorlevel 1 (
-    echo [WARN] Python was not found on PATH.
+REM Find a REAL Python 3.11+. The 'py' launcher is preferred because the bare
+REM 'python' command is often the Microsoft Store placeholder ("Python was not
+REM found; ... Microsoft Store"), which is not a real interpreter.
+set "PYCMD="
+
+py -3 -c "import sys; sys.exit(0 if sys.version_info>=(3,11) else 1)" >nul 2>&1
+if not errorlevel 1 (
+    set "PYCMD=py -3"
+) else (
+    REM Try bare python, but reject the Microsoft Store placeholder by
+    REM requiring the real "Python 3." banner in its --version output.
+    python --version 2>&1 | find /i "Python 3." >nul
+    if not errorlevel 1 (
+        python -c "import sys; sys.exit(0 if sys.version_info>=(3,11) else 1)" >nul 2>&1
+        if not errorlevel 1 set "PYCMD=python"
+    )
+)
+
+if "!PYCMD!"=="" (
+    echo [WARN] A working Python 3.11+ was not found.
+    echo        If you saw a "Microsoft Store" message, that is a placeholder,
+    echo        NOT real Python. Two ways to fix it:
+    echo          A^) Install Python from https://www.python.org/downloads/
+    echo             and TICK "Add python.exe to PATH" during setup, or
+    echo          B^) turn off the fake alias: Settings ^> Apps ^>
+    echo             Advanced app settings ^> App execution aliases ^>
+    echo             switch OFF python.exe and python3.exe.
+    echo.
     where winget >nul 2>&1
     if errorlevel 1 (
-        echo [ERROR] winget is not available to install Python automatically.
-        echo         Install Python 3.11+ from https://www.python.org/downloads/
-        echo         and tick "Add python.exe to PATH", then run this script again.
+        echo Then close this window and run setup_windows.bat again.
         pause
         exit /b 1
     )
-    echo [..] Installing Python 3.12 with winget ^(a UAC prompt may appear^)
+    echo [..] Trying to install Python 3.12 with winget ^(a prompt may appear^)...
     winget install -e --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements
     echo.
-    echo [OK] Python was installed. PATH changes need a fresh terminal.
-    echo      Please CLOSE this window and run setup_windows.bat again.
+    echo [OK] If it installed, CLOSE this window and run setup_windows.bat again
+    echo      so the new PATH is picked up.
     pause
     exit /b 0
 )
 
-for /f "tokens=2" %%v in ('python --version 2^>^&1') do set PYVER=%%v
-python -c "import sys; sys.exit(0 if sys.version_info >= (3,11) else 1)"
-if errorlevel 1 (
-    echo [ERROR] Python 3.11 or newer is required. Found %PYVER%.
-    echo         Install a newer Python from https://www.python.org/downloads/
-    pause
-    exit /b 1
-)
-echo [OK] Python %PYVER% found.
+for /f "tokens=2" %%v in ('!PYCMD! --version 2^>^&1') do set "PYVER=%%v"
+echo [OK] Using Python !PYVER! ^(via "!PYCMD!"^).
 
 REM ---- 2. virtual environment ----------------------------------------------
 if not exist ".venv" (
     echo [..] Creating virtual environment in .venv
-    python -m venv .venv
+    !PYCMD! -m venv .venv
     if errorlevel 1 (
         echo [ERROR] Could not create the virtual environment.
         pause

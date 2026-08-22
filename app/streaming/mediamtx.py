@@ -328,6 +328,19 @@ class MediaMtxServer:
             logger.error(self.last_error)
             return False
 
+        # The RTMP port is where the ingest publishes. If something else already
+        # holds it, MediaMTX cannot bind it and every channel would fail with an
+        # "I/O error" - so refuse up front with a message that says what to do.
+        if _port_open("127.0.0.1", self.rtmp_port):
+            self.last_error = (
+                f"RTMP port {self.rtmp_port} is already in use by another program "
+                f"(maybe a leftover MediaMTX, or another RTMP app). Stop it, or "
+                f"change the RTMP port on the Settings page."
+            )
+            logger.error(self.last_error)
+            return False
+
+        self.last_error = ""
         self.write_config()
         try:
             self._process = await asyncio.create_subprocess_exec(
@@ -346,10 +359,21 @@ class MediaMtxServer:
         self._stderr_task = asyncio.create_task(
             self._drain_output(), name="mediamtx-log"
         )
-        # Give it a moment to bind its ports (or fail fast on a port clash).
+        # Give it a moment to bind the RTMP port (or fail fast on a clash).
         ok = await self._wait_until_listening(timeout=8.0)
         if not ok:
-            self.last_error = self.last_error or "MediaMTX did not start listening"
+            # Prefer MediaMTX's own reason (its log usually says "address already
+            # in use" or names the bad port) over a generic message.
+            err_line = next(
+                (line for line in reversed(self._log_lines)
+                 if "err" in line.lower() or "fatal" in line.lower()),
+                "",
+            )
+            self.last_error = (
+                err_line
+                or self.last_error
+                or "MediaMTX did not start listening on the RTMP port"
+            )
             logger.error("MediaMTX failed to come up: %s", self.last_error)
             await self.stop()
             return False
@@ -363,19 +387,18 @@ class MediaMtxServer:
         return True
 
     async def _wait_until_listening(self, timeout: float) -> bool:
+        # Require the RTMP port specifically: it is the one the ingest publishes
+        # to, and MediaMTX exits if it cannot bind it. Checking "api OR rtmp"
+        # used to pass on a race even when RTMP never came up, which surfaced as
+        # an FFmpeg "I/O error" on every channel.
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if not self.running:
                 return False
-            if _port_open("127.0.0.1", self.api_port) or _port_open(
-                "127.0.0.1", self.rtmp_port
-            ):
+            if _port_open("127.0.0.1", self.rtmp_port):
                 return True
             await asyncio.sleep(0.25)
-        return self.running and (
-            _port_open("127.0.0.1", self.api_port)
-            or _port_open("127.0.0.1", self.rtmp_port)
-        )
+        return self.running and _port_open("127.0.0.1", self.rtmp_port)
 
     async def _drain_output(self) -> None:
         assert self._process is not None
@@ -491,6 +514,7 @@ class MediaMtxServer:
             "buffer_seconds": self.buffer_seconds,
             "binary": self.resolve_binary() or "",
             "last_error": self.last_error,
+            "log": self.recent_log(12),
         }
 
 

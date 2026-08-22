@@ -105,13 +105,13 @@ def test_resolve_binary_finds_bundled(monkeypatch, tmp_path):
 # --------------------------------------------------------------------------- #
 # process lifecycle (with a fake binary that just binds the api port)
 # --------------------------------------------------------------------------- #
-def _write_fake_mediamtx(path: Path, api_port: int) -> Path:
-    """A stand-in that binds the API port and idles, like the real server."""
+def _write_fake_mediamtx(path: Path, rtmp_port: int) -> Path:
+    """A stand-in that binds the RTMP port and idles, like the real server."""
     script = path / "fake_mediamtx.py"
     script.write_text(
         "import socket, sys, time\n"
         f"s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n"
-        f"s.bind(('127.0.0.1', {api_port})); s.listen(5)\n"
+        f"s.bind(('127.0.0.1', {rtmp_port})); s.listen(5)\n"
         "while True:\n"
         "    time.sleep(0.2)\n",
         encoding="utf-8",
@@ -124,14 +124,14 @@ def _write_fake_mediamtx(path: Path, api_port: int) -> Path:
 
 @pytest.mark.skipif(sys.platform.startswith("win"), reason="POSIX launcher")
 async def test_server_starts_and_stops(tmp_path):
-    api_port = _free_port()
-    launcher = _write_fake_mediamtx(tmp_path, api_port)
+    rtmp_port = _free_port()
+    launcher = _write_fake_mediamtx(tmp_path, rtmp_port)
     server = mm.MediaMtxServer(
         data_dir=tmp_path / "data",
         log_dir=tmp_path / "logs",
-        rtmp_port=_free_port(),
+        rtmp_port=rtmp_port,
         hls_port=_free_port(),
-        api_port=api_port,
+        api_port=_free_port(),
         buffer_seconds=30,
         binary_path=str(launcher),
     )
@@ -141,6 +141,31 @@ async def test_server_starts_and_stops(tmp_path):
     assert server.pid is not None
     await server.stop()
     assert server.running is False
+
+
+async def test_server_refuses_when_rtmp_port_is_taken(tmp_path):
+    """A busy RTMP port is reported clearly instead of causing I/O errors."""
+    busy = socket.socket()
+    busy.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    busy.bind(("127.0.0.1", 0))
+    busy.listen(5)
+    taken_port = busy.getsockname()[1]
+    fake_binary = tmp_path / "mediamtx"
+    fake_binary.write_text("#!/bin/sh\n")  # exists, so we reach the port check
+    try:
+        server = mm.MediaMtxServer(
+            data_dir=tmp_path / "data",
+            log_dir=tmp_path / "logs",
+            rtmp_port=taken_port,
+            hls_port=_free_port(),
+            api_port=_free_port(),
+            binary_path=str(fake_binary),
+        )
+        assert await server.start() is False
+        assert str(taken_port) in server.last_error
+        assert "in use" in server.last_error.lower()
+    finally:
+        busy.close()
 
 
 async def test_server_reports_missing_binary(tmp_path):

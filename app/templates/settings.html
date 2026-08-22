@@ -216,7 +216,18 @@
                   {{ t('and place the binary at') }} <code>{{ mediamtx_download.target }}</code>.
                 {% endif %}
               </div>
-              {% if buffer.enabled and buffer.last_error %}
+              {% if buffer.enabled and not buffer.running %}
+                <div class="alert alert-danger py-2 mt-2 mb-0 smaller">
+                  <strong>🇹🇭 บัฟเฟอร์เปิดอยู่แต่ MediaMTX ไม่ทำงาน</strong><br>
+                  {{ buffer.last_error or 'MediaMTX is not running.' }}
+                  {% if buffer.log %}
+                    <details class="mt-1"><summary>{{ t('MediaMTX log') }}</summary>
+                      <pre class="mb-0 mt-1" style="white-space:pre-wrap; font-size:11px;">{% for line in buffer.log %}{{ line }}
+{% endfor %}</pre>
+                    </details>
+                  {% endif %}
+                </div>
+              {% elif buffer.enabled and buffer.last_error %}
                 <div class="form-text text-danger">{{ buffer.last_error }}</div>
               {% endif %}
             </div>

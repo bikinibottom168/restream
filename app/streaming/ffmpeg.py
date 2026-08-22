@@ -204,6 +204,36 @@ def build_command(
     return args
 
 
+def build_egress_command(
+    *,
+    ffmpeg_path: str,
+    input_url: str,
+    output_url: str,
+) -> list[str]:
+    """A copy relay from the local buffer (MediaMTX) to the final RTMP server.
+
+    When buffering is on the ingest publishes into MediaMTX; this second, cheap
+    ``-c copy`` process reads the buffered stream back out and pushes it to the
+    operator's real destination.  Because it reads from the buffer (not the
+    flaky source), a short source dropout - or the slate during a longer one -
+    keeps flowing to the downstream server instead of ending the push.
+    """
+    return [
+        ffmpeg_path,
+        "-hide_banner",
+        "-loglevel", "warning",
+        "-nostats",
+        "-progress", "pipe:1",
+        "-fflags", "+genpts",
+        "-i", input_url,
+        "-c", "copy",
+        "-max_muxing_queue_size", "1024",
+        "-flvflags", "no_duration_filesize",
+        "-f", "flv",
+        output_url,
+    ]
+
+
 def build_slate_command(
     *,
     ffmpeg_path: str,
@@ -672,6 +702,28 @@ class FFmpegManager:
             video_bitrate=video_bitrate,
         )
         logger.info("channel %s: starting slate -> %s", channel_id, safe_command(command))
+        process = FFmpegProcess(channel_id, command, ffmpeg_log_dir=self.ffmpeg_log_dir)
+        await process.start()
+        return process
+
+    async def spawn_egress(
+        self,
+        channel_id: int,
+        *,
+        input_url: str,
+        output_url: str,
+    ) -> FFmpegProcess:
+        """Start the copy relay from the buffer to the final RTMP destination."""
+        command = build_egress_command(
+            ffmpeg_path=self.ffmpeg_path,
+            input_url=input_url,
+            output_url=output_url,
+        )
+        logger.info(
+            "channel %s: starting egress -> %s",
+            channel_id,
+            safe_command(command),
+        )
         process = FFmpegProcess(channel_id, command, ffmpeg_log_dir=self.ffmpeg_log_dir)
         await process.start()
         return process

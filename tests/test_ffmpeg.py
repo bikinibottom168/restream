@@ -7,6 +7,7 @@ from app.streaming.ffmpeg import (
     FFmpegCapabilities,
     FFmpegProcess,
     build_command,
+    build_egress_command,
     build_header_blob,
     build_slate_command,
     safe_command,
@@ -168,6 +169,19 @@ def test_slate_command_loops_a_configured_image():
     assert "-loop" in command
     assert "/tmp/reconnect.png" in command
     assert not any(arg.startswith("color=") for arg in command)
+
+
+def test_egress_command_is_a_copy_relay():
+    command = build_egress_command(
+        ffmpeg_path="ffmpeg",
+        input_url="rtmp://127.0.0.1:1935/ch5",
+        output_url="rtmp://cdn.example/live/key123",
+    )
+    assert command[command.index("-i") + 1] == "rtmp://127.0.0.1:1935/ch5"
+    assert "-c" in command and command[command.index("-c") + 1] == "copy"
+    assert command[-1] == "rtmp://cdn.example/live/key123"
+    assert command[-2] == "flv" and command[-3] == "-f"
+    assert "libx264" not in command
 
 
 def test_header_blob_format():

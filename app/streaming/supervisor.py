@@ -89,6 +89,8 @@ class StreamSupervisor:
         self._task: asyncio.Task[None] | None = None
         self._process: FFmpegProcess | None = None
         self._slate: FFmpegProcess | None = None
+        self._egress: FFmpegProcess | None = None
+        self._egress_target: str = ""
         self._stop_event = asyncio.Event()
         self._wake_event = asyncio.Event()
         self._state = ChannelState.STOPPED
@@ -138,6 +140,8 @@ class StreamSupervisor:
         """Stop the channel and its FFmpeg process, and wait for both."""
         self._stop_event.set()
         self._wake_event.set()
+        self._egress_target = ""
+        await self._stop_egress()
         await self._stop_slate()
         process = self._process
         if process is not None:
@@ -263,6 +267,13 @@ class StreamSupervisor:
             await self._set_state(ChannelState.ERROR, error=str(exc))
             await self._event(EventType.SYSTEM_ERROR, str(exc), level="error")
             await self._notify_system_error(f"supervisor for {self.channel_name}: {exc}")
+        finally:
+            # The egress and slate outlive individual outages (so the downstream
+            # keeps getting the slate while reconnecting), but must be cleaned up
+            # once the channel task itself is done.
+            self._egress_target = ""
+            await self._stop_egress()
+            await self._stop_slate()
 
     # ------------------------------------------------------------------ #
     # ------------------------------------------------------------------ #
@@ -330,6 +341,42 @@ class StreamSupervisor:
                 await slate.stop("real source resumed")
             except Exception:  # noqa: BLE001
                 logger.debug("channel %s: slate stop error", self.channel_id)
+
+    # ------------------------------------------------------------------ #
+    # egress: buffer -> final RTMP server (only when buffered + destination set)
+    # ------------------------------------------------------------------ #
+    async def _start_egress(self, final_rtmp: str) -> None:
+        """Relay the buffered stream on to the operator's real RTMP server."""
+        if not final_rtmp or self._mediamtx is None or not self._mediamtx.running:
+            return
+        if self._egress is not None and self._egress.running:
+            return
+        if self._egress is not None:
+            await self._stop_egress()
+        try:
+            self._egress = await self._ffmpeg.spawn_egress(
+                self.channel_id,
+                input_url=self._mediamtx.ingest_url(self.channel_id),
+                output_url=final_rtmp,
+            )
+            self._egress_target = final_rtmp
+            logger.info(
+                "channel %s: egress to final server started", self.channel_id
+            )
+        except Exception as exc:  # noqa: BLE001 - egress must not kill the channel
+            logger.warning(
+                "channel %s: could not start egress: %s", self.channel_id, exc
+            )
+            self._egress = None
+
+    async def _stop_egress(self) -> None:
+        egress = self._egress
+        self._egress = None
+        if egress is not None:
+            try:
+                await egress.stop("egress stopped")
+            except Exception:  # noqa: BLE001
+                logger.debug("channel %s: egress stop error", self.channel_id)
 
     async def _resolve(self, channel: Any) -> ResolutionOutcome | None:
         """Resolve the source. Returns ``None`` when the channel must stop."""
@@ -446,7 +493,23 @@ class StreamSupervisor:
             started_at=utcnow(),
             error="",
         )
-        destination = "buffer server" if buffered else f"{output_url.rsplit('/', 1)[0]}/***"
+        # When buffered, also relay the buffered stream on to the operator's
+        # real RTMP server, if they configured one - otherwise the downstream
+        # server would get nothing (a 404) once the buffer took over the output.
+        final_rtmp = ""
+        if buffered:
+            final_rtmp = channel.resolved_rtmp(
+                self._settings.get_str("default_rtmp_server")
+            )
+            if final_rtmp:
+                await self._start_egress(final_rtmp)
+
+        if buffered and final_rtmp:
+            destination = "buffer server + final RTMP"
+        elif buffered:
+            destination = "buffer server"
+        else:
+            destination = f"{output_url.rsplit('/', 1)[0]}/***"
         await self._event(
             EventType.STREAM_STARTED,
             f"relaying to {destination} in {mode} mode",
@@ -515,6 +578,17 @@ class StreamSupervisor:
                 code = process.returncode
                 detail = process.last_error or process.exit_reason or ""
                 return f"ffmpeg exited (code {code}) {detail}".strip()
+
+            # Keep the egress (buffer -> final server) alive on its own. Its
+            # death must NOT restart the whole channel - just relaunch the relay
+            # so the downstream server keeps getting the stream.
+            if self._egress_target and (
+                self._egress is None or not self._egress.running
+            ):
+                logger.info(
+                    "channel %s: egress relay is down - restarting it", self.channel_id
+                )
+                await self._start_egress(self._egress_target)
 
             if process.is_stalled(stall_timeout):
                 await self._event(
