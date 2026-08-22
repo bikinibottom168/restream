@@ -46,7 +46,9 @@ class Settings(BaseSettings):
     check_interval_seconds: int = 300
     process_monitor_interval_seconds: int = 5
     failure_threshold: int = 2
-    stall_timeout_seconds: int = 60
+    #: A brief input hiccup that a player would hide should not trigger a
+    #: restart, so give the output clock some grace before calling it stalled.
+    stall_timeout_seconds: int = 90
     probe_timeout_seconds: int = 20
 
     # ---- restart / backoff ------------------------------------------------

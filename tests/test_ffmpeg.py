@@ -47,6 +47,18 @@ def test_copy_mode_is_the_default():
     assert "libx264" not in command
 
 
+def test_copy_mode_has_player_like_tolerance():
+    command = build_command(
+        ffmpeg_path="ffmpeg", stream=stream(), output_url="rtmp://x/y", caps=CAPS
+    )
+    fflags = command[command.index("-fflags") + 1]
+    assert "discardcorrupt" in fflags  # skip a bad packet instead of dropping
+    assert "genpts" in fflags
+    assert "igndts" in fflags
+    assert command[command.index("-avoid_negative_ts") + 1] == "make_zero"
+    assert command[command.index("-max_muxing_queue_size") + 1] == "4096"
+
+
 def test_progress_pipe_is_always_requested():
     command = build_command(
         ffmpeg_path="ffmpeg", stream=stream(), output_url="rtmp://x/y", caps=CAPS

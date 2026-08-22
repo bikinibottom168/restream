@@ -164,7 +164,12 @@ def build_command(
         if blob:
             args += ["-headers", blob]
 
-    args += ["-fflags", "+genpts"]
+    # Tolerate what a *player* shrugs off but a strict remux would trip on:
+    #   +genpts        - fill in missing presentation timestamps
+    #   +discardcorrupt- drop corrupt packets (a segment glitch) instead of
+    #                    erroring out, the way VLC skips a bad frame
+    #   +igndts        - ignore broken decode timestamps from the source TS
+    args += ["-fflags", "+genpts+discardcorrupt+igndts"]
     if extra_input_args:
         args += list(extra_input_args)
     args += ["-i", stream.url]
@@ -194,7 +199,10 @@ def build_command(
             args += ["-bsf:a", "aac_adtstoasc"]
 
     args += [
-        "-max_muxing_queue_size", "1024",
+        # Normalise timestamps so the FLV muxer does not choke on the source's
+        # discontinuities ("Non-monotonous DTS") - the #1 cause of copy drops.
+        "-avoid_negative_ts", "make_zero",
+        "-max_muxing_queue_size", "4096",
         "-flvflags", "no_duration_filesize",
         "-f", "flv",
     ]
@@ -224,10 +232,11 @@ def build_egress_command(
         "-loglevel", "warning",
         "-nostats",
         "-progress", "pipe:1",
-        "-fflags", "+genpts",
+        "-fflags", "+genpts+discardcorrupt+igndts",
         "-i", input_url,
         "-c", "copy",
-        "-max_muxing_queue_size", "1024",
+        "-avoid_negative_ts", "make_zero",
+        "-max_muxing_queue_size", "4096",
         "-flvflags", "no_duration_filesize",
         "-f", "flv",
         output_url,

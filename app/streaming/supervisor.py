@@ -618,14 +618,29 @@ class StreamSupervisor:
                         self.consecutive_failures,
                         threshold,
                     )
-                    if self.consecutive_failures >= threshold:
+                    # Do NOT restart a channel whose OUTPUT is still flowing just
+                    # because a *separate* re-probe failed. A second connection to
+                    # a token/session-limited source (like an HLS portal) is often
+                    # refused even while the live pull is perfectly fine - that
+                    # false negative was a real cause of frequent drops. Only the
+                    # stall detector (frozen output) or the process exiting ends
+                    # the stream; the re-probe just downgrades to DEGRADED.
+                    output_flowing = process.running and not process.is_stalled(
+                        stall_timeout
+                    )
+                    if self.consecutive_failures >= threshold and not output_flowing:
                         return (
                             f"source unreachable after {self.consecutive_failures} "
                             "consecutive checks"
                         )
+                    if output_flowing:
+                        # cap it so the counter does not grow without bound
+                        self.consecutive_failures = min(
+                            self.consecutive_failures, threshold
+                        )
                     await self._set_state(
                         ChannelState.DEGRADED,
-                        error=self.last_error or "source check failed",
+                        error=self.last_error or "source re-check failing (output still live)",
                     )
 
     async def _deep_check(self, stream: Any) -> bool:
