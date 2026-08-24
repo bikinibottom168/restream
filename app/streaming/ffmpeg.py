@@ -257,6 +257,7 @@ def build_command(
     extra_output_args: list[str] | None = None,
     output_format: str = "flv",
     profile: Any = None,
+    ts_offset: float | None = None,
 ) -> list[str]:
     """Assemble the FFmpeg argument vector for one relay.
 
@@ -267,7 +268,9 @@ def build_command(
     mode and the codec settings: every source of a seamless channel must encode
     identically, or the publisher copying its packets would break on a switch.
     ``output_format='mpegts'`` sends the result into the local UDP relay
-    instead of straight to an RTMP endpoint.
+    instead of straight to an RTMP endpoint.  ``ts_offset`` then anchors this
+    feeder's output timeline to the channel's relay epoch, so the feeder that
+    replaces it carries on from a later point instead of restarting at zero.
     """
     caps = caps or FFmpegCapabilities()
     args: list[str] = [
@@ -342,6 +345,8 @@ def build_command(
         "-avoid_negative_ts", "make_zero",
         "-max_muxing_queue_size", "4096",
     ]
+    if ts_offset is not None:
+        args += ["-output_ts_offset", f"{max(0.0, float(ts_offset)):.3f}"]
     args += _container_args(output_format)
     if extra_output_args:
         args += list(extra_output_args)
@@ -404,9 +409,23 @@ def build_publisher_command(
     It reads the local MPEG-TS relay and copies it to the real destination, so
     the RTMP session survives every source switch behind it.
 
-    ``-use_wallclock_as_timestamps`` is what makes that work: each feeder starts
-    its own clock at zero, and without restamping, the second feeder's
-    timestamps would jump backwards and the muxer would reject the stream.
+    It copies the timeline through untouched.  Continuity across a switch is
+    the *feeder's* job: each one is given ``-output_ts_offset`` anchored to the
+    channel's relay epoch (see :func:`build_command`), so successive feeders
+    hand over an already-monotonic timeline.
+
+    Restamping here instead - ``-use_wallclock_as_timestamps`` - also survives
+    the switch, but it assigns arrival time to every packet, and UDP delivers
+    in bursts: audio frames within one burst all land on nearly the same
+    timestamp and then jump, which produces a constant stream of timestamp
+    discontinuities and lets audio drift away from video.
+
+    Note the deliberately thin ``-fflags``.  The tolerance flags the ingest
+    uses (``+genpts``, ``+igndts``) exist for sources that are actually broken;
+    the relay carries MPEG-TS this application produced itself, and asking
+    FFmpeg to re-derive timestamps for it made the output markedly *worse* -
+    measured over a source switch, 365 non-monotonic DTS against 22 with them
+    off.
     """
     return [
         ffmpeg_path,
@@ -414,8 +433,7 @@ def build_publisher_command(
         "-loglevel", "warning",
         "-nostats",
         "-progress", "pipe:1",
-        "-fflags", "+genpts+discardcorrupt+igndts",
-        "-use_wallclock_as_timestamps", "1",
+        "-fflags", "+discardcorrupt",
         "-i", input_url,
         "-c", "copy",
         "-avoid_negative_ts", "make_zero",
@@ -469,6 +487,9 @@ def build_watch_command(
         "-fflags", "+genpts+discardcorrupt+igndts",
         "-i", stream.url,
         "-c", "copy",
+        # os.devnull already exists, and without -y FFmpeg stops to ask whether
+        # to overwrite it - which on a pipe means exiting immediately.
+        "-y",
         "-f", "mpegts",
         os.devnull,
     ]
@@ -486,6 +507,7 @@ def build_slate_command(
     video_bitrate: str = "500k",
     profile: Any = None,
     output_format: str = "flv",
+    ts_offset: float | None = None,
 ) -> list[str]:
     """A tiny looping "reconnecting" feed to publish while a channel is down.
 
@@ -542,6 +564,8 @@ def build_slate_command(
             "-ac", "2",
         ]
     args += ["-max_muxing_queue_size", "1024"]
+    if ts_offset is not None:
+        args += ["-output_ts_offset", f"{max(0.0, float(ts_offset)):.3f}"]
     args += _container_args(output_format)
     args.append(output_url)
     return args
@@ -919,6 +943,7 @@ class FFmpegManager:
         hardware: str = "auto",
         profile: Any = None,
         output_format: str = "flv",
+        ts_offset: float | None = None,
     ) -> FFmpegProcess:
         """Build the command and start FFmpeg for one channel."""
         video_encoder = resolve_video_encoder(hardware, self.capabilities)
@@ -937,6 +962,7 @@ class FFmpegManager:
             video_encoder=video_encoder,
             profile=profile,
             output_format=output_format,
+            ts_offset=ts_offset,
         )
         if profile is not None:
             logger.info(
@@ -969,6 +995,7 @@ class FFmpegManager:
         video_bitrate: str = "500k",
         profile: Any = None,
         output_format: str = "flv",
+        ts_offset: float | None = None,
     ) -> FFmpegProcess:
         """Start the looping "reconnecting" slate for a down channel."""
         command = build_slate_command(
@@ -980,6 +1007,7 @@ class FFmpegManager:
             video_bitrate=video_bitrate,
             profile=profile,
             output_format=output_format,
+            ts_offset=ts_offset,
         )
         logger.info("channel %s: starting slate -> %s", channel_id, safe_command(command))
         process = FFmpegProcess(channel_id, command, ffmpeg_log_dir=self.ffmpeg_log_dir)

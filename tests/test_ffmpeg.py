@@ -203,15 +203,45 @@ def test_seamless_feeder_writes_mpegts_with_the_shared_profile():
     assert "+resend_headers" in command, "a publisher attaching late still needs the tables"
 
 
-def test_publisher_restamps_so_a_source_switch_does_not_go_backwards():
+def test_publisher_passes_the_timeline_through_untouched():
     command = build_publisher_command(
         ffmpeg_path="ffmpeg",
         input_url="udp://127.0.0.1:21000",
         output_url="rtmp://a.rtmp.youtube.com/live2/key",
     )
-    assert command[command.index("-use_wallclock_as_timestamps") + 1] == "1"
     assert command[command.index("-c") + 1] == "copy", "the publisher never re-encodes"
     assert command[command.index("-f") + 1] == "flv"
+    # Restamping here assigns arrival time to every packet, and UDP arrives in
+    # bursts: that drifts audio away from video. Continuity is the feeder's job.
+    assert "-use_wallclock_as_timestamps" not in command
+    # Tolerance flags meant for broken sources make a clean relay worse.
+    fflags = command[command.index("-fflags") + 1]
+    assert "genpts" not in fflags and "igndts" not in fflags
+
+
+def test_each_feeder_starts_where_the_previous_one_left_off():
+    first = build_command(
+        ffmpeg_path="ffmpeg", stream=stream(), output_url="udp://127.0.0.1:21000",
+        profile=SeamlessProfile(), output_format="mpegts", ts_offset=0.0,
+    )
+    later = build_command(
+        ffmpeg_path="ffmpeg", stream=stream(), output_url="udp://127.0.0.1:21000",
+        profile=SeamlessProfile(), output_format="mpegts", ts_offset=137.25,
+    )
+    assert first[first.index("-output_ts_offset") + 1] == "0.000"
+    assert later[later.index("-output_ts_offset") + 1] == "137.250"
+    # Without a relay there is no shared timeline to anchor to.
+    plain = build_command(
+        ffmpeg_path="ffmpeg", stream=stream(), output_url="rtmp://x/y"
+    )
+    assert "-output_ts_offset" not in plain
+
+
+def test_the_shadow_run_does_not_stop_to_ask_about_the_null_sink():
+    # os.devnull exists, so without -y FFmpeg prompts and exits - which would
+    # make every failback attempt fail its final gate.
+    command = build_watch_command(ffmpeg_path="ffmpeg", stream=stream())
+    assert "-y" in command
 
 
 def test_seamless_slate_matches_the_feeder_profile():

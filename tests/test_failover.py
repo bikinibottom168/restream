@@ -193,15 +193,39 @@ def test_penalising_also_discards_the_health_already_earned():
 # everything is down
 # --------------------------------------------------------------------------- #
 def test_retries_slow_down_only_after_a_long_total_outage():
-    common = {"slow_after_seconds": 900, "slow_delay_seconds": 300}
+    common = {"slow_after_seconds": 900, "slow_delay_seconds": 300, "source_count": 2}
     assert slow_retry_delay(60, normal_delay=30, **common) == 30
     assert slow_retry_delay(899, normal_delay=30, **common) == 30
     assert slow_retry_delay(900, normal_delay=30, **common) == 300
 
 
+def test_a_channel_with_no_backup_never_slows_down():
+    """With nothing else to try, slowing down only delays the recovery.
+
+    The source these channels use can hand out a URL that lives two minutes
+    and start working again at any second, so the channel keeps reconnecting
+    on the ordinary ladder for as long as it takes.
+    """
+    for down_for in (60, 900, 3_600, 86_400):
+        assert (
+            slow_retry_delay(
+                down_for,
+                normal_delay=30,
+                source_count=1,
+                slow_after_seconds=900,
+                slow_delay_seconds=300,
+            )
+            == 30
+        )
+
+
 def test_slow_mode_never_speeds_a_retry_up():
     delay = slow_retry_delay(
-        5_000, normal_delay=600, slow_after_seconds=900, slow_delay_seconds=300
+        5_000,
+        normal_delay=600,
+        source_count=2,
+        slow_after_seconds=900,
+        slow_delay_seconds=300,
     )
     assert delay == 600
 
@@ -209,7 +233,11 @@ def test_slow_mode_never_speeds_a_retry_up():
 def test_slow_mode_can_be_turned_off():
     assert (
         slow_retry_delay(
-            10_000, normal_delay=30, slow_after_seconds=0, slow_delay_seconds=300
+            10_000,
+            normal_delay=30,
+            source_count=3,
+            slow_after_seconds=0,
+            slow_delay_seconds=300,
         )
         == 30
     )
@@ -242,6 +270,11 @@ def test_a_refused_rtmp_endpoint_is_not_a_source_failure():
     assert is_output_failure("Error opening output files: Connection refused")
     assert is_output_failure("[out#0/flv] Error closing file: Broken pipe")
     assert is_output_failure("Could not write header for output file")
+
+
+def test_the_seamless_publisher_counts_as_the_destination():
+    # It sits on the output side: rotating source URLs cannot bring it back.
+    assert is_output_failure("seamless publisher could not be restarted")
 
 
 def test_source_side_errors_still_count():

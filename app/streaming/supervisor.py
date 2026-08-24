@@ -165,6 +165,10 @@ class StreamSupervisor:
         self._publisher: FFmpegProcess | None = None
         self._publisher_target = ""
         self._relay_port = 0
+        #: Monotonic zero for the relay's timeline. Every feeder is offset from
+        #: it so successive feeders hand over a continuous, rising timeline
+        #: instead of each restarting the clock at zero.
+        self._relay_epoch = 0.0
         self._restored_source = False
         #: The operator's real RTMP destination, if any. Kept here so the slate
         #: rules can tell "viewers only" from "a downstream service is watching".
@@ -307,6 +311,13 @@ class StreamSupervisor:
                 self._downstream_rtmp = channel.resolved_rtmp(
                     self._settings.get_str("default_rtmp_server")
                 )
+
+                # A switch requested while the channel was between attempts -
+                # which is exactly when an operator reaches for "Back to
+                # primary" - has no FFmpeg to interrupt, so it is applied here
+                # instead of after the next monitor pass.
+                if self._switch_to is not None:
+                    await self._apply_switch(self._switch_reason or "operator request")
                 if self._active_index >= len(self._sources):
                     # A backup was deleted while it was on air.
                     await self._set_active_index(0, persist=True)
@@ -416,6 +427,12 @@ class StreamSupervisor:
 
     def _seamless_wanted(self, channel: Any) -> bool:
         return bool(getattr(channel, "seamless_switch", False)) and len(self._sources) > 1
+
+    def _relay_offset(self) -> float:
+        """Where on the relay timeline the feeder starting now should begin."""
+        if not self._relay_epoch:
+            return 0.0
+        return max(0.0, time.monotonic() - self._relay_epoch)
 
     def _profile(self) -> SeamlessProfile:
         """The single encoding every source of this channel is normalised to."""
@@ -635,6 +652,7 @@ class StreamSupervisor:
                 image_path=self._settings.get_str("slate_path"),
                 profile=profile,
                 output_format=slate_format,
+                ts_offset=self._relay_offset() if slate_format == "mpegts" else None,
             )
             logger.info("channel %s: slate up while reconnecting", self.channel_id)
         except Exception as exc:  # noqa: BLE001 - slate must never break recovery
@@ -764,6 +782,7 @@ class StreamSupervisor:
                     self.last_error = f"seamless relay unavailable: {exc}"
                     await self._set_state(ChannelState.OFFLINE, error=self.last_error)
                     return False
+                self._relay_epoch = time.monotonic()
             target = relay_output_url(self._relay_port)
             mode = "transcode"
 
@@ -780,6 +799,7 @@ class StreamSupervisor:
                 hardware=self._settings.get_str("transcode_hardware"),
                 profile=profile,
                 output_format=spawn_format,
+                ts_offset=self._relay_offset() if self._seamless else None,
             )
         except FileNotFoundError:
             message = (
@@ -1134,8 +1154,13 @@ class StreamSupervisor:
         self._failover.configure(failback_after_seconds=self._failback_after(channel))
 
         # A quiet probe: the primary is not being pulled right now, so a second
-        # connection to it is safe and tells us something real.
-        outcome = await self._resolver.resolve(channel, force=True, validate=True)
+        # connection to it is safe and tells us something real. It is not
+        # persisted - the backup is what is on air, and overwriting the stored
+        # source URL every minute would make the dashboard report the wrong one
+        # and inflate the resolve count with checks nobody watched.
+        outcome = await self._resolver.resolve(
+            channel, force=True, validate=True, persist=False
+        )
         self._failover.record_primary_probe(outcome.ok)
         if not outcome.ok:
             logger.debug(
@@ -1203,6 +1228,10 @@ class StreamSupervisor:
             await process.stop(reason)
             self._pids.clear(self.channel_id)
         self._process = None
+        # A shadow run only means something while the source it would replace
+        # is actually on air; leaving one behind would have it judged against
+        # a channel that has since moved on.
+        await self._stop_shadow()
 
     async def _handle_failure(self, reason: str) -> bool:
         """Record the outage, notify once, wait, and say whether to retry."""
@@ -1298,13 +1327,18 @@ class StreamSupervisor:
                 await self._event(EventType.ALL_SOURCES_DOWN, message, level="error")
                 await self._notify_all_down(message)
 
+        # Slowing down is only right when there was something else to try and
+        # it failed too; slow_retry_delay leaves a single-source channel on the
+        # ordinary ladder so it comes back the moment its one source does.
         if self._down_since is not None and not switched:
             delay = slow_retry_delay(
                 time.monotonic() - self._down_since,
                 normal_delay=delay,
+                source_count=len(self._sources),
                 slow_after_seconds=self._settings.get_int("all_down_slow_after_seconds"),
                 slow_delay_seconds=self._settings.get_int("all_down_retry_delay_seconds"),
             )
+
 
         # The next attempt must ask the provider for a brand-new URL.
         self._force_refresh = True

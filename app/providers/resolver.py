@@ -185,14 +185,32 @@ class StreamResolver:
 
     # ------------------------------------------------------------------ #
     async def resolve(
-        self, channel: Any, *, force: bool = False, validate: bool = True
+        self,
+        channel: Any,
+        *,
+        force: bool = False,
+        validate: bool = True,
+        persist: bool = True,
     ) -> ResolutionOutcome:
-        """Resolve (and optionally validate) the input for *channel*."""
+        """Resolve (and optionally validate) the input for *channel*.
+
+        ``persist=False`` vets the source without adopting it - used to check
+        on a primary while a backup is the one actually on air, where writing
+        the result would make the dashboard show a URL nobody is watching.
+        """
         async with self._lock_for(channel.id):
-            return await self._resolve_locked(channel, force=force, validate=validate)
+            return await self._resolve_locked(
+                channel, force=force, validate=validate, persist=persist
+            )
 
     async def _resolve_locked(
-        self, channel: Any, *, force: bool, validate: bool, _retry: bool = True
+        self,
+        channel: Any,
+        *,
+        force: bool,
+        validate: bool,
+        persist: bool = True,
+        _retry: bool = True,
     ) -> ResolutionOutcome:
         stream: ResolvedStream | None = None
         from_cache = False
@@ -247,7 +265,7 @@ class StreamResolver:
                     channel.id,
                 )
                 return await self._resolve_locked(
-                    channel, force=True, validate=validate, _retry=False
+                    channel, force=True, validate=validate, persist=persist, _retry=False
                 )
             await self._persist_error(channel.id, str(exc))
             await self._record_auth_failure(channel, str(exc))
@@ -272,7 +290,7 @@ class StreamResolver:
                         channel.id,
                     )
                     return await self._resolve_locked(
-                        channel, force=True, validate=True, _retry=False
+                        channel, force=True, validate=True, persist=persist, _retry=False
                     )
                 await self._persist_error(channel.id, probe.error)
                 return ResolutionOutcome(
@@ -280,6 +298,10 @@ class StreamResolver:
                 )
 
         # ---- persist ----------------------------------------------------
+        if not persist:
+            return ResolutionOutcome(
+                ok=True, stream=stream, probe=probe, from_cache=from_cache
+            )
         if not from_cache:
             await run_db(
                 crud.mark_source_resolved,

@@ -240,6 +240,17 @@ def serialize_channel(
     ffmpeg = snapshot.get("ffmpeg") or {}
     metrics = ffmpeg.get("metrics") or {}
     source_url = channel.source_url or ""
+    on_fallback = snapshot.get("on_fallback", bool(active_index))
+    # ``channel.source_url`` caches the *primary's* last resolution, so while a
+    # backup is on air it names a URL nobody is watching. The supervisor knows
+    # what is actually playing; its copy is already masked, which costs nothing
+    # here because a backup URL is one the operator typed, not a signed one.
+    live_source = snapshot.get("source_url") or ""
+    shown_source = (
+        live_source
+        if on_fallback and live_source
+        else (source_url if reveal_url else mask_url_token(source_url))
+    )
 
     return {
         "id": channel.id,
@@ -256,7 +267,7 @@ def serialize_channel(
         "active_source_index": active_index,
         "active_source": snapshot.get("active_source")
         or ("primary" if not active_index else f"fallback {active_index}"),
-        "on_fallback": snapshot.get("on_fallback", bool(active_index)),
+        "on_fallback": on_fallback,
         "seamless_switch": bool(getattr(channel, "seamless_switch", False)),
         "auto_failback": getattr(channel, "auto_failback", "inherit") or "inherit",
         "failover_after_seconds": getattr(channel, "failover_after_seconds", 0) or 0,
@@ -274,8 +285,8 @@ def serialize_channel(
         "rtmp_url": channel.resolved_rtmp(default_rtmp),
         "rtmp_configured": bool(channel.resolved_rtmp(default_rtmp)),
         "stream_key": channel.stream_key,
-        "source_url": source_url if reveal_url else mask_url_token(source_url),
-        "source_url_short": shorten_url(source_url),
+        "source_url": shown_source,
+        "source_url_short": shorten_url(live_source if on_fallback and live_source else source_url),
         "source_resolved_at": isoformat(channel.source_resolved_at),
         "source_expires_at": isoformat(channel.source_expires_at),
         "source_age": humanize_duration(seconds_since(channel.source_resolved_at)),

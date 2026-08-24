@@ -183,6 +183,9 @@ _OUTPUT_FAILURE_MARKERS = (
     "broken pipe",
     "could not write header",
     "rtmp server sent error",
+    # Our own wording for the seamless publisher, which sits on the output side
+    # too: no backup URL can fix it.
+    "seamless publisher",
 )
 
 
@@ -206,15 +209,24 @@ def slow_retry_delay(
     down_for_seconds: float,
     *,
     normal_delay: float,
+    source_count: int = 2,
     slow_after_seconds: int,
     slow_delay_seconds: int,
 ) -> float:
     """Back off harder once *every* source has been down for a long time.
 
-    A source that has been dead for a quarter of an hour will not come back
-    sooner because we asked it nine times a minute; the slow mode keeps the
-    channel retrying forever without hammering the origin or filling the log.
+    Sources all dead for a quarter of an hour will not come back sooner
+    because we asked them nine times a minute; the slow mode keeps the channel
+    retrying forever without hammering the origins or filling the log.
+
+    A channel with a **single** source is excluded (``source_count <= 1``) and
+    keeps the ordinary ladder however long it has been down.  There is nothing
+    else to try, so slowing down only means coming back later than necessary -
+    and a source handing out URLs that live two minutes can start working again
+    at any second.  The restart circuit already paces that case.
     """
+    if source_count <= 1:
+        return float(normal_delay)
     if slow_after_seconds > 0 and down_for_seconds >= slow_after_seconds:
         return max(float(normal_delay), float(slow_delay_seconds))
     return float(normal_delay)
