@@ -123,9 +123,165 @@
               <div class="form-text">🇹🇭 พรีเซ็ต x264 — ยิ่งช้ายิ่งบีบอัดดี (เช่น veryfast, fast, medium)</div>
             </div>
             <div class="col-md-6">
+              <label class="form-label">{{ t('Transcode encoder') }}</label>
+              <select class="form-select" name="transcode_hardware">
+                {% set hw = capabilities.best_hw_encoder %}
+                <option value="auto" {% if values.transcode_hardware == 'auto' %}selected{% endif %}>
+                  {{ t('Auto (use GPU if available)') }}{% if hw %} — {{ hw }}{% endif %}
+                </option>
+                <option value="off" {% if values.transcode_hardware == 'off' %}selected{% endif %}>
+                  {{ t('Software (CPU / x264)') }}
+                </option>
+                {% for enc in capabilities.hw_encoders %}
+                  <option value="{{ enc }}" {% if values.transcode_hardware == enc %}selected{% endif %}>{{ enc }}</option>
+                {% endfor %}
+              </select>
+              <div class="form-text">
+                {% if capabilities.hw_encoders %}
+                  🇹🇭 พบตัวเร่งฮาร์ดแวร์: <strong>{{ capabilities.hw_encoders | join(', ') }}</strong> — ใช้ transcode ได้หลายช่องโดยไม่กิน CPU มาก
+                {% else %}
+                  🇹🇭 ไม่พบตัวเร่งฮาร์ดแวร์ในเครื่องนี้ จะใช้ CPU (x264)
+                {% endif %}
+              </div>
+            </div>
+            <div class="col-md-6">
               <label class="form-label">Source User-Agent</label>
               <input class="form-control" name="source_user_agent" value="{{ values.source_user_agent }}">
               <div class="form-text">🇹🇭 User-Agent ที่ใช้ตอนดึงต้นทาง</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12 col-xl-6">
+      <div class="card h-100">
+        <div class="card-header">{{ t('Backup sources (failover)') }}</div>
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-12">
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" name="failover_enabled" id="failover-enabled"
+                       {% if values.failover_enabled %}checked{% endif %}>
+                <label class="form-check-label" for="failover-enabled">
+                  {{ t('Switch to a backup URL when the primary source stays broken') }}
+                </label>
+              </div>
+              <div class="form-text">
+                🇹🇭 ใส่ URL สำรองได้ที่หน้าแก้ไขของแต่ละช่อง ค่าตรงนี้คือค่ากลางที่ทุกช่องใช้ร่วมกัน
+              </div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">{{ t('Switch to backup after (s)') }}</label>
+              <input class="form-control" type="number" name="failover_after_seconds"
+                     value="{{ values.failover_after_seconds }}" min="30" max="86400">
+              <div class="form-text">
+                🇹🇭 ต้นทางหลักล่มต่อเนื่องกี่วินาทีจึงสลับไปช่องสำรอง (แนะนำ 120 — ลองซ้ำได้ 3–5 ครั้งก่อนสลับ)
+              </div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">{{ t('...or failed attempts in a row') }}</label>
+              <input class="form-control" type="number" name="failover_failure_threshold"
+                     value="{{ values.failover_failure_threshold }}" min="1" max="20">
+              <div class="form-text">
+                🇹🇭 กันเคส "ช่องเด้ง" — ขึ้นแล้วหลุดสั้นๆ ซ้ำๆ ซึ่งตัวจับเวลาด้านซ้ายจะนับไม่ถึงสักที
+              </div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">{{ t('Counts as working after (s)') }}</label>
+              <input class="form-control" type="number" name="failover_min_stable_seconds"
+                     value="{{ values.failover_min_stable_seconds }}" min="10" max="3600">
+              <div class="form-text">🇹🇭 ต้องอยู่ได้นานเท่านี้จึงนับว่าต้นทางนั้นใช้ได้จริง</div>
+            </div>
+            <div class="col-md-6 d-flex align-items-end">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="auto_failback" id="auto-failback"
+                       {% if values.auto_failback %}checked{% endif %}>
+                <label class="form-check-label" for="auto-failback">
+                  {{ t('Return to the primary automatically') }}
+                </label>
+              </div>
+            </div>
+            <div class="col-12">
+              <div class="form-text mt-0">
+                🇹🇭 ปิดไว้เป็นค่าเริ่มต้น เพราะการสลับกลับทำให้ภาพสะดุดอีกครั้ง — เปิดไว้ก็ได้ แต่หน้าช่องจะมีปุ่ม
+                "กลับไปช่องหลัก" ให้กดเองในจังหวะที่คุณเลือกอยู่แล้ว
+              </div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">{{ t('Return to primary after (s)') }}</label>
+              <input class="form-control" type="number" name="failback_after_seconds"
+                     value="{{ values.failback_after_seconds }}" min="60" max="86400">
+              <div class="form-text">
+                🇹🇭 ต้นทางหลักต้องผ่านการตรวจติดกันนานเท่านี้ก่อน (แนะนำ 600) — ตั้งใจให้ยาวกว่าขาสลับออกมาก
+              </div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">{{ t('Primary probe interval (s)') }}</label>
+              <input class="form-control" type="number" name="failback_probe_interval_seconds"
+                     value="{{ values.failback_probe_interval_seconds }}" min="15" max="3600">
+              <div class="form-text">🇹🇭 ระหว่างใช้ช่องสำรอง จะแอบตรวจช่องหลักทุกกี่วินาที</div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">{{ t('Shadow run before returning (s)') }}</label>
+              <input class="form-control" type="number" name="failback_shadow_seconds"
+                     value="{{ values.failback_shadow_seconds }}" min="0" max="3600">
+              <div class="form-text">
+                🇹🇭 ด่านสุดท้าย — ดึงช่องหลักทิ้งไว้จริงๆ นานเท่านี้ก่อนสลับกลับ (0 = ข้าม) เพราะ probe ผ่าน ≠ อยู่ได้ยาว
+              </div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">{{ t('Repeat-failure window (s)') }}</label>
+              <input class="form-control" type="number" name="failback_penalty_window_seconds"
+                     value="{{ values.failback_penalty_window_seconds }}" min="0" max="86400">
+              <div class="form-text">
+                🇹🇭 ถ้ากลับช่องหลักแล้วพังซ้ำภายในเวลานี้ เวลารอครั้งถัดไปจะคูณสอง (กันเด้งไปมา) สูงสุด
+                {{ values.failback_penalty_max_seconds }}s
+              </div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">{{ t('Slow down when all sources are down after (s)') }}</label>
+              <input class="form-control" type="number" name="all_down_slow_after_seconds"
+                     value="{{ values.all_down_slow_after_seconds }}" min="0" max="86400">
+              <div class="form-text">🇹🇭 ล่มทุกช่องนานเกินนี้ จะลดความถี่การลองใหม่ (0 = ไม่ลด)</div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">{{ t('Slow retry delay (s)') }}</label>
+              <input class="form-control" type="number" name="all_down_retry_delay_seconds"
+                     value="{{ values.all_down_retry_delay_seconds }}" min="10" max="3600">
+              <div class="form-text">🇹🇭 ในโหมดช้า จะลองใหม่ทุกกี่วินาที (ยังลองต่อไปเรื่อยๆ ไม่หยุด)</div>
+            </div>
+            <div class="col-12">
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" name="slate_keep_for_rtmp" id="slate-keep"
+                       {% if values.slate_keep_for_rtmp %}checked{% endif %}>
+                <label class="form-check-label" for="slate-keep">
+                  {{ t('Never stop the slate for channels that push to an RTMP server') }}
+                </label>
+              </div>
+              <div class="form-text">
+                🇹🇭 <strong>สำคัญถ้ายิงออก YouTube</strong> — ถ้าปล่อยให้สเลทดับตอนล่มยาว ปลายทางจะไม่ได้รับข้อมูล
+                และ YouTube จะปิด broadcast ให้เอง ต้องเริ่มใหม่ ลิงก์เดิมตาย
+              </div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">{{ t('Seamless switch resolution') }}</label>
+              <input class="form-control" name="seamless_video_size" value="{{ values.seamless_video_size }}"
+                     placeholder="1280x720">
+              <div class="form-text">
+                🇹🇭 โหมดสลับไม่สะดุด (เปิดรายช่อง) จะแปลงทุกต้นทางให้เป็นค่านี้เหมือนกันหมด
+              </div>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">{{ t('Seamless fps') }}</label>
+              <input class="form-control" type="number" name="seamless_fps" min="5" max="60"
+                     value="{{ values.seamless_fps }}">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">{{ t('Relay port base') }}</label>
+              <input class="form-control" type="number" name="relay_port_base" min="1024" max="65000"
+                     value="{{ values.relay_port_base }}">
+              <div class="form-text">🇹🇭 พอร์ต UDP ภายในเครื่อง</div>
             </div>
           </div>
         </div>
@@ -168,7 +324,10 @@
               <label class="form-label">{{ t('Viewer host / IP') }}</label>
               <input class="form-control" name="viewer_host" value="{{ values.viewer_host }}"
                      placeholder="192.168.1.10">
-              <div class="form-text">{{ t('The address players use to reach this machine.') }}</div>
+              <div class="form-text">
+                {{ t('The address players use to reach this machine.') }}
+                🇹🇭 ดูจากเครื่องอื่นไม่ได้? รัน <code>firewall_open.bat</code> (Run as administrator) เพื่อเปิดพอร์ต
+              </div>
             </div>
             <div class="col-md-4 d-flex align-items-end">
               <div class="form-check">

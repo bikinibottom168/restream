@@ -13,7 +13,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
-from app.core.i18n import translate_provider_types
+from app.core.i18n import explain_stream_error, translate_provider_types
 from app.core.logging import tail_file
 from app.core.security import mask_url_token
 from app.core.settings_store import EDITABLE_KEYS, SettingsValidationError
@@ -30,6 +30,7 @@ from app.providers.base import (
 from app.providers.factory import ProviderFactory
 from app.providers.iptv import IptvProvider
 from app.providers.manager import PROVIDER_SECRET_KEYS
+from app.streaming.failover import parse_fallback_sources
 from app.web.bulk import deduplicate, parse_channel_list
 from app.web.context import AppContext
 from app.web.deps import get_ctx, require_auth
@@ -65,6 +66,12 @@ async def channel_list(ctx: AppContext, *, reveal: bool | None = None) -> list[d
     default_rtmp = ctx.store.get_str("default_rtmp_server")
     show_full = ctx.store.get_bool("show_full_source_url") if reveal is None else reveal
     buffered = ctx.streams.buffer_enabled
+    # 24h health: outage count + total downtime per channel, for uptime %.
+    health = {
+        item["channel_id"]: item
+        for item in await run_db(crud.downtime_summary, days=1)
+    }
+    window = 24 * 3600
     rows: list[dict[str, Any]] = []
     for channel in channels:
         row = serialize_channel(
@@ -76,6 +83,11 @@ async def channel_list(ctx: AppContext, *, reveal: bool | None = None) -> list[d
         )
         row["buffered"] = buffered
         row["viewer_urls"] = ctx.streams.viewer_urls_for(channel.id) if buffered else {}
+        stat = health.get(channel.id)
+        down = min(window, int(stat["total_seconds"])) if stat else 0
+        row["outages_24h"] = stat["outages"] if stat else 0
+        row["uptime_24h"] = round((window - down) / window * 100, 1)
+        row["last_error_explained"] = explain_stream_error(row.get("last_error") or "")
         rows.append(row)
     return rows
 
@@ -220,6 +232,34 @@ async def api_test_source(
     await _require_channel(channel_id)
     outcome = await ctx.streams.test_source(channel_id)
     return outcome.as_dict(reveal=ctx.store.get_bool("show_full_source_url"))
+
+
+@router.post("/channels/{channel_id}/use-primary")
+async def api_use_primary(
+    channel_id: int, ctx: AppContext = Depends(get_ctx)
+) -> dict[str, Any]:
+    """Put the channel back on its primary source now, on the operator's word.
+
+    Deliberately manual: automatic failback is off by default because the
+    switch itself costs a glitch, so the operator picks the moment.
+    """
+    await _require_channel(channel_id)
+    return await ctx.streams.switch_source(channel_id, 0)
+
+
+@router.post("/channels/{channel_id}/use-backup")
+async def api_use_backup(
+    channel_id: int, ctx: AppContext = Depends(get_ctx)
+) -> dict[str, Any]:
+    """Move the channel to the next backup source now."""
+    channel = await _require_channel(channel_id)
+    sources = parse_fallback_sources(getattr(channel, "fallback_urls", ""))
+    if not sources:
+        return {"ok": False, "error": "this channel has no backup source configured"}
+    supervisor = ctx.streams.peek(channel_id)
+    current = supervisor.snapshot().get("active_source_index", 0) if supervisor else 0
+    target = current + 1 if current + 1 <= len(sources) else 1
+    return await ctx.streams.switch_source(channel_id, target)
 
 
 @router.post("/channels/{channel_id}/enable")

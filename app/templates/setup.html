@@ -6,8 +6,8 @@
   <div class="col-12 col-xl-9">
     <h1 class="h4 mb-1">First run setup</h1>
     <p class="text-secondary">
-      Three steps and you are relaying. Everything here can be changed later on
-      the Settings and Providers pages.
+      Four steps and you are relaying - the last one is optional. Everything
+      here can be changed later on the Settings and Providers pages.
     </p>
 
     <div class="card mb-3">
@@ -88,6 +88,44 @@
           </div>
           <div id="setup-result" class="smaller mt-3"></div>
         </form>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-header">4. Backup sources (optional, but worth two minutes)</div>
+      <div class="card-body">
+        <p class="smaller mb-2">
+          Every channel can hold standby media URLs next to its primary source.
+          When the primary stays broken the relay moves to the next backup on its
+          own, and only returns to the primary once that has proven itself again.
+        </p>
+        <ul class="smaller mb-2">
+          <li>
+            Add the backup URLs on a channel's <strong>Edit</strong> form
+            (<em>Backup source URLs</em>, one per line) - typically a direct
+            <code>.m3u8</code> on another host.
+          </li>
+          <li>
+            Defaults: leave the primary after
+            <strong>{{ values.failover_after_seconds }}s</strong> (or
+            {{ values.failover_failure_threshold }} failed attempts in a row), and
+            return to it only after it probes clean for
+            <strong>{{ values.failback_after_seconds }}s</strong> plus a
+            {{ values.failback_shadow_seconds }}s shadow run.
+          </li>
+          <li>
+            Returning to the primary is <strong>manual by default</strong> - the
+            channel page has a "Back to primary" button - because a switch costs
+            viewers a glitch.
+          </li>
+        </ul>
+        <div class="alert alert-warning smaller mb-2">
+          🇹🇭 <strong>ยิงออก YouTube หรือ RTMP ปลายทาง?</strong> เปิด
+          <em>Anti-drop buffer</em> และปล่อยให้สเลท "กำลังเชื่อมต่อใหม่" ทำงานตลอด
+          (ตั้งค่าไว้แล้วโดยค่าเริ่มต้น) ไม่งั้นตอนล่มยาว ปลายทางจะไม่ได้รับข้อมูลและปิด
+          broadcast ให้เอง ต้องเริ่มสตรีมใหม่ทั้งหมด
+        </div>
+        <a class="btn btn-sm btn-outline-primary" href="/settings">Open Settings</a>
       </div>
     </div>
 

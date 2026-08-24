@@ -44,6 +44,36 @@
             <dt class="col-5">{{ t('Endpoint URL') }}</dt>
             <dd class="col-7 text-break">{{ channel.resolve_url }}</dd>
             {% endif %}
+            {% if channel.fallback_count %}
+            <dt class="col-5">{{ t('Source in use') }}</dt>
+            <dd class="col-7">
+              {% if channel.on_fallback %}
+                <span class="badge text-bg-warning">{{ t('BACKUP') }}</span>
+                <span class="text-secondary">{{ channel.active_source }}</span>
+                <div class="mt-1">
+                  <button class="btn btn-sm btn-outline-primary py-0" data-action="use-primary"
+                          data-id="{{ channel.id }}">{{ t('Back to primary') }}</button>
+                </div>
+                {% if channel.failback_shadow_running %}
+                  <div class="smaller text-info mt-1">{{ t('Testing the primary now...') }}</div>
+                {% elif channel.failback_eta_seconds is not none and channel.failback_eta_seconds >= 0 %}
+                  <div class="smaller text-secondary mt-1">
+                    {{ t('Primary healthy for') }} {{ channel.primary_healthy_seconds }}s ·
+                    {{ t('auto return in') }} {{ channel.failback_eta_seconds }}s
+                  </div>
+                {% endif %}
+              {% else %}
+                <span class="badge text-bg-success">{{ t('PRIMARY') }}</span>
+                <span class="text-secondary smaller">
+                  {{ channel.fallback_count }} {{ t('backup(s) ready') }}
+                </span>
+                <div class="mt-1">
+                  <button class="btn btn-sm btn-outline-secondary py-0" data-action="use-backup"
+                          data-id="{{ channel.id }}">{{ t('Use backup now') }}</button>
+                </div>
+              {% endif %}
+            </dd>
+            {% endif %}
             <dt class="col-5">{{ t('Current source') }}</dt>
             <dd class="col-7">
               <span class="text-break">{{ channel.source_url or '-' }}</span>

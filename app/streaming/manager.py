@@ -91,6 +91,10 @@ class StreamManager:
         self._watchdog_task: asyncio.Task[None] | None = None
         self._shutting_down = False
         self._started_at = time.monotonic()
+        #: Track MediaMTX so the watchdog can restart it if it dies, and so the
+        #: same error is not written to the event log on every reconcile tick.
+        self._mediamtx_was_running = False
+        self._mediamtx_down_reported = False
 
         self.ffmpeg_info = BinaryInfo(name="ffmpeg", path=settings.get_str("ffmpeg_path"))
         self.ffprobe_info = BinaryInfo(name="ffprobe", path=settings.get_str("ffprobe_path"))
@@ -148,25 +152,54 @@ class StreamManager:
         return info
 
     async def _ensure_mediamtx(self) -> None:
-        """Start or stop MediaMTX to match the current buffer setting."""
-        if self.buffer_enabled and not self._mediamtx.running:
-            ok = await self._mediamtx.start()
-            if ok:
+        """Keep MediaMTX matching the buffer setting - and revive it if it died.
+
+        Called at startup and on every watchdog tick, so a MediaMTX that crashes
+        mid-run comes back on its own instead of leaving every buffered channel
+        broken until the app is restarted. Events are emitted only on a state
+        change, never once per tick.
+        """
+        if not self.buffer_enabled:
+            if self._mediamtx.running:
+                await self._mediamtx.stop()
+            self._mediamtx_was_running = False
+            self._mediamtx_down_reported = False
+            return
+
+        if self._mediamtx.running:
+            self._mediamtx_was_running = True
+            self._mediamtx_down_reported = False
+            return
+
+        crashed = self._mediamtx_was_running  # was up on the previous tick
+        ok = await self._mediamtx.start()
+        self._mediamtx_was_running = self._mediamtx.running
+
+        if ok:
+            self._mediamtx_down_reported = False
+            if crashed:
+                logger.warning("MediaMTX had stopped - restarted it")
+                await run_db(
+                    crud.add_event,
+                    event_type=EventType.SYSTEM_STARTED,
+                    message="buffer server stopped unexpectedly and was restarted",
+                    level="warning",
+                )
+            else:
                 await run_db(
                     crud.add_event,
                     event_type=EventType.SYSTEM_STARTED,
                     message=f"buffer server started (delay {self._settings.get_int('buffer_seconds')}s)",
                 )
-            else:
-                logger.error("buffer enabled but MediaMTX did not start: %s", self._mediamtx.last_error)
-                await run_db(
-                    crud.add_event,
-                    event_type=EventType.SYSTEM_ERROR,
-                    message=f"buffer server could not start: {self._mediamtx.last_error}",
-                    level="error",
-                )
-        elif not self.buffer_enabled and self._mediamtx.running:
-            await self._mediamtx.stop()
+        elif not self._mediamtx_down_reported:
+            self._mediamtx_down_reported = True
+            logger.error("buffer enabled but MediaMTX did not start: %s", self._mediamtx.last_error)
+            await run_db(
+                crud.add_event,
+                event_type=EventType.SYSTEM_ERROR,
+                message=f"buffer server could not start: {self._mediamtx.last_error}",
+                level="error",
+            )
 
     async def start(self) -> None:
         """Startup sequence: binaries, orphans, state reset, auto-start, watchdog."""
@@ -342,6 +375,17 @@ class StreamManager:
         supervisor = self.supervisor(channel_id)
         await supervisor.restart("restart requested from dashboard")
         return {"ok": True}
+
+    async def switch_source(self, channel_id: int, index: int) -> dict[str, Any]:
+        """Put a channel on a specific source now (0 = primary)."""
+        supervisor = self.supervisor(channel_id)
+        switched = await supervisor.switch_source(index, "operator request")
+        if not switched:
+            return {
+                "ok": False,
+                "error": "that source is already on air, or does not exist",
+            }
+        return {"ok": True, "active_source_index": index}
 
     async def refresh_channel(self, channel_id: int) -> dict[str, Any]:
         """Resolve a new URL for one channel; restart only that channel."""
@@ -545,6 +589,10 @@ class StreamManager:
             raise
 
     async def _reconcile(self) -> None:
+        # Revive MediaMTX first if the buffer is on and it died, so channels can
+        # publish again on this same tick.
+        await self._ensure_mediamtx()
+
         channels = await run_db(crud.list_channels)
         known_ids = {channel.id for channel in channels}
 

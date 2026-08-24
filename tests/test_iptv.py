@@ -386,6 +386,38 @@ class _FakeCtx:
         self.providers = _FakeProviders(secrets)
 
 
+async def test_cookies_persist_across_provider_restarts(tmp_path):
+    """A saved cookie jar is reloaded on the next start, so no fresh login."""
+    cookie_path = tmp_path / "cookies" / "provider_1.json"
+
+    # first "run": start, drop a session cookie in, save it
+    p1 = IptvProvider(name="tv", config={"base_url": "https://godtv.vip"},
+                      cookie_path=cookie_path)
+    await p1.start()
+    p1._client.cookies.set("PHPSESSID", "abc123", domain="godtv.vip", path="/")  # noqa: SLF001
+    p1._save_cookies()  # noqa: SLF001
+    await p1.aclose()
+    assert cookie_path.is_file()
+
+    # second "run": a brand-new provider restores the session
+    p2 = IptvProvider(name="tv", config={"base_url": "https://godtv.vip"},
+                      cookie_path=cookie_path)
+    await p2.start()
+    jar = {c.name: c.value for c in p2._client.cookies.jar}  # noqa: SLF001
+    assert jar.get("PHPSESSID") == "abc123"
+    # restored session is assumed good, so no login is forced up front
+    assert p2._authenticated is True  # noqa: SLF001
+    await p2.aclose()
+
+
+async def test_missing_cookie_file_is_harmless(tmp_path):
+    p = IptvProvider(name="tv", config={"base_url": "https://x"},
+                     cookie_path=tmp_path / "none.json")
+    await p.start()
+    assert p._authenticated is False  # noqa: SLF001 - nothing to restore
+    await p.aclose()
+
+
 async def test_prime_url_targets_the_form_page_not_the_post_url():
     """When the form is shown at /login-page but POSTs to /authen, priming the
     form page is what picks up csrf_tv_name."""

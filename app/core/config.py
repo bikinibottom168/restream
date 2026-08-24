@@ -57,6 +57,45 @@ class Settings(BaseSettings):
     restart_window_threshold: int = 10
     unstable_restart_delay_seconds: int = 60
 
+    # ---- source failover --------------------------------------------------
+    #: Master switch for backup sources. Off means a channel only ever uses its
+    #: primary, whatever it has stored in ``fallback_urls``.
+    failover_enabled: bool = True
+    #: Leave the primary once it has been down this long...
+    failover_after_seconds: int = 120
+    #: ...or this many starts in a row have died before proving stable, which
+    #: is the flapping case a plain timer never catches.
+    failover_failure_threshold: int = 3
+    #: A source must hold this long to count as genuinely working.
+    failover_min_stable_seconds: int = 60
+    #: Return to the primary by itself once it proves healthy again. Off by
+    #: default: a switch costs a glitch, so the operator picks the moment.
+    auto_failback: bool = False
+    #: How long the primary must probe clean before a failback is considered.
+    failback_after_seconds: int = 600
+    #: How often the primary is probed while a fallback is on air.
+    failback_probe_interval_seconds: int = 60
+    #: Final gate: run the primary into a throwaway output for this long and
+    #: require it to keep flowing. A probe that passes is not proof it lasts.
+    failback_shadow_seconds: int = 90
+    #: A primary that breaks again within this long after a failback doubles
+    #: the healthy period required before the next one (capped below).
+    failback_penalty_window_seconds: int = 900
+    failback_penalty_max_seconds: int = 3_600
+    #: Once every source has been down this long, retry this slowly instead of
+    #: hammering origins that are clearly not coming back this minute.
+    all_down_slow_after_seconds: int = 900
+    all_down_retry_delay_seconds: int = 300
+    #: Ignore ``slate_max_seconds`` for channels that push to a downstream RTMP
+    #: server: letting the slate stop there makes the downstream service end
+    #: the broadcast, which costs far more than the slate's CPU.
+    slate_keep_for_rtmp: bool = True
+    #: Seamless switching (per channel): the encoding every source is
+    #: normalised to, and where the local UDP relay ports start.
+    seamless_video_size: str = "1280x720"
+    seamless_fps: int = 25
+    relay_port_base: int = 21_000
+
     # ---- ffmpeg -----------------------------------------------------------
     ffmpeg_path: str = "ffmpeg"
     ffprobe_path: str = "ffprobe"
@@ -67,6 +106,10 @@ class Settings(BaseSettings):
     transcode_video_bitrate: str = "2500k"
     transcode_audio_bitrate: str = "128k"
     transcode_preset: str = "veryfast"
+    #: Hardware encoder for transcode mode: 'auto' (use a detected GPU encoder,
+    #: else software), 'off' (always software x264), or a specific encoder name
+    #: (videotoolbox / nvenc / qsv / amf).
+    transcode_hardware: str = "auto"
 
     # ---- buffered relay (MediaMTX) ---------------------------------------
     #: When on, each channel publishes into a local MediaMTX server that holds
@@ -159,6 +202,15 @@ class Settings(BaseSettings):
         if v and not v.startswith(("rtmp://", "rtmps://")):
             raise ValueError("DEFAULT_RTMP_SERVER must start with rtmp:// or rtmps://")
         return v
+
+    @field_validator("seamless_video_size")
+    @classmethod
+    def _valid_size(cls, v: str) -> str:
+        text = (v or "").strip().lower()
+        width, _, height = text.partition("x")
+        if not (width.isdigit() and height.isdigit()):
+            raise ValueError("SEAMLESS_VIDEO_SIZE must look like 1280x720")
+        return text
 
     @field_validator("ui_language")
     @classmethod

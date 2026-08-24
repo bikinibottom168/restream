@@ -93,3 +93,15 @@ def test_navigation_is_translated():
     """The menus the operator sees first must all be covered."""
     for phrase in ("Dashboard", "Providers", "Events", "History", "Logs", "Settings"):
         assert THAI.get(phrase), f"navigation item {phrase!r} has no Thai text"
+
+
+def test_explain_stream_error_maps_common_causes():
+    from app.core.i18n import explain_stream_error
+
+    assert "โทเคน" in explain_stream_error("Server returned 403 Forbidden")
+    assert "พอร์ต" in explain_stream_error("bind: address already in use")
+    assert "transcode" in explain_stream_error("Non-monotonous DTS in output stream")
+    assert "ปลายทาง" in explain_stream_error("Connection reset by peer")
+    # unknown errors return empty so the caller shows the raw text
+    assert explain_stream_error("some totally novel message") == ""
+    assert explain_stream_error("") == ""

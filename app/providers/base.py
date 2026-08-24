@@ -214,12 +214,16 @@ class StreamProvider(abc.ABC):
         name: str = "",
         config: dict[str, Any] | None = None,
         secrets: dict[str, str] | None = None,
+        cookie_path: Any = None,
     ) -> None:
         self.provider_id = provider_id
         self.name = name or self.label
         self.config: dict[str, Any] = dict(config or {})
         self._secrets: dict[str, str] = dict(secrets or {})
         self._authenticated = False
+        #: Where this provider persists its login cookie jar across restarts
+        #: (a :class:`pathlib.Path`, or ``None`` to keep cookies in memory only).
+        self._cookie_path = cookie_path
 
     # ------------------------------------------------------------------ #
     # lifecycle

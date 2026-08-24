@@ -73,6 +73,12 @@ def get_engine() -> Engine:
 #: because we check ``PRAGMA table_info`` first.
 SCHEMA_ADDITIONS: tuple[tuple[str, str, str], ...] = (
     ("channels", "resolve_url", "TEXT NOT NULL DEFAULT ''"),
+    ("channels", "fallback_urls", "TEXT NOT NULL DEFAULT ''"),
+    ("channels", "active_source_index", "INTEGER NOT NULL DEFAULT 0"),
+    ("channels", "failover_after_seconds", "INTEGER NOT NULL DEFAULT 0"),
+    ("channels", "failback_after_seconds", "INTEGER NOT NULL DEFAULT 0"),
+    ("channels", "auto_failback", "VARCHAR(16) NOT NULL DEFAULT 'inherit'"),
+    ("channels", "seamless_switch", "BOOLEAN NOT NULL DEFAULT 0"),
 )
 
 

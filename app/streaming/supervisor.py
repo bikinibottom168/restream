@@ -22,6 +22,12 @@ stops, restarts or re-resolves another.
       |
       v
     refresh THIS channel's URL, restart FFmpeg, verify, ONLINE
+      |
+      |  still failing after failover_after_seconds (or too many short-lived
+      |  starts in a row)
+      v
+    switch to the channel's next backup URL, and - only once the primary has
+    probed clean for a long time and survived a shadow run - switch back
 """
 
 from __future__ import annotations
@@ -39,10 +45,23 @@ from app.database.db import run_db
 from app.database.models import EventType
 from app.providers.resolver import ResolutionOutcome, StreamResolver
 from app.streaming.backoff import BackoffPolicy, RestartCircuit
+from app.streaming.failover import (
+    FailoverPolicy,
+    SourceCandidate,
+    build_sources,
+    is_output_failure,
+    slow_retry_delay,
+)
 from app.streaming.ffmpeg import FFmpegManager, FFmpegProcess
 from app.streaming.mediamtx import MediaMtxServer, choose_output
 from app.streaming.orphan import PidRegistry
 from app.streaming.probe import probe_stream
+from app.streaming.relay import (
+    SeamlessProfile,
+    pick_relay_port,
+    relay_input_url,
+    relay_output_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +110,7 @@ class StreamSupervisor:
         self._slate: FFmpegProcess | None = None
         self._egress: FFmpegProcess | None = None
         self._egress_target: str = ""
+        self._egress_last_start = 0.0
         self._stop_event = asyncio.Event()
         self._wake_event = asyncio.Event()
         self._state = ChannelState.STOPPED
@@ -101,6 +121,14 @@ class StreamSupervisor:
             throttled_delay=settings.get_int("unstable_restart_delay_seconds"),
         )
 
+        self._failover = FailoverPolicy(
+            failover_after_seconds=settings.get_int("failover_after_seconds"),
+            failure_threshold=settings.get_int("failover_failure_threshold"),
+            min_stable_seconds=settings.get_int("failover_min_stable_seconds"),
+            failback_after_seconds=settings.get_int("failback_after_seconds"),
+            penalty_max_seconds=settings.get_int("failback_penalty_max_seconds"),
+        )
+
         self.channel_name = ""
         self.last_outcome: ResolutionOutcome | None = None
         self.last_error = ""
@@ -109,6 +137,38 @@ class StreamSupervisor:
         self.consecutive_failures = 0
         self._force_refresh = False
         self._down_since: float | None = None
+
+        # ---- source failover -----------------------------------------
+        #: [primary, *backups], rebuilt from the channel row every cycle.
+        self._sources: list[SourceCandidate] = [SourceCandidate(index=0, label="primary")]
+        self._active_index = 0
+        #: Set when a switch is decided; the main loop applies it instead of
+        #: treating the restart as an outage.
+        self._switch_to: int | None = None
+        #: True only for a switch the failback gate approved. Wrapping round to
+        #: the primary because every source is failing is not a recovery, and
+        #: must not be announced - or penalised - as one.
+        self._switch_is_failback = False
+        #: Why the pending switch was decided, so the event log says something
+        #: better than "ffmpeg exited" for a switch the operator asked for.
+        self._switch_reason = ""
+        #: Which sources have already been tried during the current outage, so
+        #: "everything is down" is announced once rather than every lap.
+        self._tried_while_down: set[int] = set()
+        self._all_down_announced = False
+        self._failed_back_at = 0.0
+        self._failback_next_probe = 0.0
+        self._shadow: FFmpegProcess | None = None
+        self._shadow_deadline = 0.0
+        #: Seamless mode: one publisher that outlives every source switch.
+        self._seamless = False
+        self._publisher: FFmpegProcess | None = None
+        self._publisher_target = ""
+        self._relay_port = 0
+        self._restored_source = False
+        #: The operator's real RTMP destination, if any. Kept here so the slate
+        #: rules can tell "viewers only" from "a downstream service is watching".
+        self._downstream_rtmp = ""
 
     # ------------------------------------------------------------------ #
     # public control surface
@@ -143,6 +203,8 @@ class StreamSupervisor:
         self._egress_target = ""
         await self._stop_egress()
         await self._stop_slate()
+        await self._stop_shadow()
+        await self._stop_publisher()
         process = self._process
         if process is not None:
             await process.stop(reason)
@@ -203,6 +265,13 @@ class StreamSupervisor:
             threshold=self._settings.get_int("restart_window_threshold"),
             throttled_delay=self._settings.get_int("unstable_restart_delay_seconds"),
         )
+        self._failover.configure(
+            failover_after_seconds=self._settings.get_int("failover_after_seconds"),
+            failure_threshold=self._settings.get_int("failover_failure_threshold"),
+            min_stable_seconds=self._settings.get_int("failover_min_stable_seconds"),
+            failback_after_seconds=self._settings.get_int("failback_after_seconds"),
+            penalty_max_seconds=self._settings.get_int("failback_penalty_max_seconds"),
+        )
 
     # ------------------------------------------------------------------ #
     # main loop
@@ -219,6 +288,28 @@ class StreamSupervisor:
                 if not channel.enabled:
                     await self._set_state(ChannelState.DISABLED)
                     return
+
+                self._sources = build_sources(channel)
+                if not self._restored_source:
+                    # Come back on whatever source was working before the app
+                    # restarted, instead of forcing an outage on a primary that
+                    # was already known to be broken.
+                    self._restored_source = True
+                    stored = int(getattr(channel, "active_source_index", 0) or 0)
+                    if 0 < stored < len(self._sources):
+                        self._active_index = stored
+                        logger.info(
+                            "channel %s: resuming on %s",
+                            self.channel_id,
+                            self._sources[stored].name,
+                        )
+                self._seamless = self._seamless_wanted(channel)
+                self._downstream_rtmp = channel.resolved_rtmp(
+                    self._settings.get_str("default_rtmp_server")
+                )
+                if self._active_index >= len(self._sources):
+                    # A backup was deleted while it was on air.
+                    await self._set_active_index(0, persist=True)
 
                 output_url, buffered = choose_output(
                     self.channel_id,
@@ -237,26 +328,46 @@ class StreamSupervisor:
                     )
                     return
 
+                source = self._sources[self._active_index]
+
                 await self._set_state(ChannelState.STARTING)
-                outcome = await self._resolve(channel)
+                outcome = await self._resolve_source(channel, source)
                 if outcome is None:
                     return  # unsupported / fatal, already reported
                 if not outcome.ok:
-                    if await self._handle_failure(outcome.error or "source unavailable"):
+                    reason = outcome.error or "source unavailable"
+                    self._record_source_failure(reason)
+                    if await self._handle_failure(reason):
                         continue
                     return
 
                 started = await self._launch(channel, outcome, output_url, buffered)
                 if not started:
-                    if await self._handle_failure(self.last_error or "ffmpeg failed to start"):
+                    reason = self.last_error or "ffmpeg failed to start"
+                    self._record_source_failure(reason)
+                    if await self._handle_failure(reason):
                         continue
                     return
 
                 reason = await self._monitor()
+                ran_seconds = (
+                    time.monotonic() - self.started_monotonic
+                    if self.started_monotonic
+                    else 0.0
+                )
                 await self._teardown(reason)
 
                 if self._stop_event.is_set():
                     return
+
+                # A switch the supervisor decided on (or the operator asked
+                # for) is not an outage: apply it and start the new source
+                # straight away, without backoff or a downtime record.
+                if self._switch_to is not None:
+                    await self._apply_switch(reason)
+                    continue
+
+                self._record_source_failure(reason, ran_seconds=ran_seconds)
                 if not await self._handle_failure(reason):
                     return
         except asyncio.CancelledError:  # pragma: no cover - shutdown path
@@ -268,24 +379,211 @@ class StreamSupervisor:
             await self._event(EventType.SYSTEM_ERROR, str(exc), level="error")
             await self._notify_system_error(f"supervisor for {self.channel_name}: {exc}")
         finally:
-            # The egress and slate outlive individual outages (so the downstream
-            # keeps getting the slate while reconnecting), but must be cleaned up
-            # once the channel task itself is done.
+            # The egress, slate and seamless publisher outlive individual
+            # outages (so the downstream keeps getting the slate while
+            # reconnecting), but must be cleaned up once the channel task
+            # itself is done.
             self._egress_target = ""
             await self._stop_egress()
             await self._stop_slate()
+            await self._stop_shadow()
+            await self._stop_publisher()
+
+    # ------------------------------------------------------------------ #
+    # source selection
+    # ------------------------------------------------------------------ #
+    @property
+    def active_source(self) -> SourceCandidate:
+        if self._active_index < len(self._sources):
+            return self._sources[self._active_index]
+        return self._sources[0]
+
+    @property
+    def on_fallback(self) -> bool:
+        return self._active_index != 0
+
+    def _failover_enabled(self) -> bool:
+        return self._settings.get_bool("failover_enabled") and len(self._sources) > 1
+
+    def _auto_failback_enabled(self, channel: Any) -> bool:
+        """Per-channel choice, falling back to the global default."""
+        mode = (getattr(channel, "auto_failback", "") or "inherit").strip().lower()
+        if mode == "on":
+            return True
+        if mode == "off":
+            return False
+        return self._settings.get_bool("auto_failback")
+
+    def _seamless_wanted(self, channel: Any) -> bool:
+        return bool(getattr(channel, "seamless_switch", False)) and len(self._sources) > 1
+
+    def _profile(self) -> SeamlessProfile:
+        """The single encoding every source of this channel is normalised to."""
+        return SeamlessProfile(
+            size=self._settings.get_str("seamless_video_size") or "1280x720",
+            fps=self._settings.get_int("seamless_fps"),
+            video_bitrate=self._settings.get_str("transcode_video_bitrate"),
+            audio_bitrate=self._settings.get_str("transcode_audio_bitrate"),
+            preset=self._settings.get_str("transcode_preset"),
+            encoder=self._ffmpeg.encoder_for(
+                self._settings.get_str("transcode_hardware")
+            ),
+        )
+
+    def _failover_after(self, channel: Any) -> int:
+        override = int(getattr(channel, "failover_after_seconds", 0) or 0)
+        return override or self._settings.get_int("failover_after_seconds")
+
+    def _failback_after(self, channel: Any) -> int:
+        override = int(getattr(channel, "failback_after_seconds", 0) or 0)
+        return override or self._settings.get_int("failback_after_seconds")
+
+    async def _set_active_index(self, index: int, *, persist: bool = True) -> None:
+        self._active_index = max(0, min(index, len(self._sources) - 1))
+        self._failback_next_probe = 0.0
+        if persist:
+            await run_db(
+                crud.update_channel,
+                self.channel_id,
+                active_source_index=self._active_index,
+            )
+
+    async def switch_source(self, index: int, reason: str = "operator request") -> bool:
+        """Move this channel to *index* now (dashboard 'use primary' button).
+
+        Works on a stopped channel too - the source list is read from the row
+        rather than from whatever the last run happened to load.
+        """
+        channel = await self._load()
+        if channel is not None:
+            self._sources = build_sources(channel)
+        if index < 0 or index >= len(self._sources):
+            return False
+        if index == self._active_index:
+            return False
+        self._switch_to = index
+        self._switch_reason = reason
+        if not self.is_running:
+            await self._set_active_index(index)
+            self._switch_to = None
+            self._switch_reason = ""
+            return True
+        logger.info(
+            "channel %s: switching to %s (%s)",
+            self.channel_id,
+            self._sources[index].name,
+            reason,
+        )
+        # Ending the current process makes the main loop pick the switch up.
+        process = self._process
+        if process is not None:
+            await process.stop(reason)
+        self.wake()
+        return True
+
+    async def _apply_switch(self, reason: str) -> None:
+        """Commit a decided switch and tell the operator about it."""
+        target = self._switch_to or 0
+        is_failback = self._switch_is_failback
+        reason = self._switch_reason or reason
+        self._switch_to = None
+        self._switch_is_failback = False
+        self._switch_reason = ""
+        previous = self.active_source
+        await self._set_active_index(target)
+        current = self.active_source
+        self._backoff.reset()
+        self._failover.record_stable(target)
+        if target == 0 and is_failback:
+            self._failed_back_at = time.monotonic()
+            await self._event(
+                EventType.SOURCE_FAILBACK,
+                f"back on the primary source ({reason})",
+            )
+            await self._notify_failover(current.name, reason, back_to_primary=True)
+        else:
+            await self._event(
+                EventType.SOURCE_FAILOVER,
+                f"switched from {previous.name} to {current.name}: {reason}",
+                level="warning",
+            )
+            await self._notify_failover(current.name, reason, back_to_primary=False)
+        # Cover the couple of seconds the new source needs to come up.
+        await self._start_slate()
+
+    def _record_source_failure(self, reason: str, ran_seconds: float = 0.0) -> None:
+        """Count a failure against the current source - unless it was not one.
+
+        A refused RTMP endpoint fails every source equally, so counting it
+        would rotate through the whole list and report "all sources down" for
+        a problem that lives entirely downstream.
+        """
+        if is_output_failure(reason):
+            logger.info(
+                "channel %s: destination failure, keeping %s (%s)",
+                self.channel_id,
+                self.active_source.name,
+                reason[:120],
+            )
+            return
+        self._failover.record_failure(self._active_index, ran_seconds=ran_seconds)
+        self._tried_while_down.add(self._active_index)
+
+    async def _resolve_source(
+        self, channel: Any, source: SourceCandidate
+    ) -> ResolutionOutcome | None:
+        """Resolve whichever source is currently on air."""
+        if source.is_primary:
+            return await self._resolve(channel)
+
+        outcome = await self._resolver.resolve_direct(channel, source)
+        self.last_outcome = outcome
+        if outcome.unsupported:
+            # A protected backup is a configuration mistake in one URL, not a
+            # reason to give up on the channel: fail it and let the loop move on.
+            logger.warning(
+                "channel %s: backup %s is protected media - skipping it",
+                self.channel_id,
+                source.name,
+            )
+            return ResolutionOutcome(ok=False, error=outcome.error)
+        if not outcome.ok and self._down_since is None:
+            await self._event(
+                EventType.SOURCE_FAILED,
+                f"{source.name}: {outcome.error}",
+                level="warning",
+            )
+        return outcome
 
     # ------------------------------------------------------------------ #
     # ------------------------------------------------------------------ #
     # "reconnecting" slate (only while buffered and down)
     # ------------------------------------------------------------------ #
     def _slate_wanted(self) -> bool:
+        if not self._settings.get_bool("buffer_slate_enabled"):
+            return False
+        # On a seamless channel the slate feeds the relay, so it works with or
+        # without the buffer - and it is what keeps the publisher (and the
+        # downstream service behind it) fed while no source is available.
+        if self._seamless and self._publisher is not None:
+            return True
         return (
             self._settings.get_bool("buffer_enabled")
-            and self._settings.get_bool("buffer_slate_enabled")
             and self._mediamtx is not None
             and self._mediamtx.running
         )
+
+    def _slate_limit(self) -> int:
+        """Seconds of outage after which the slate stops. 0 = never.
+
+        A channel pushing to a downstream RTMP service is the exception: if the
+        slate stops there the push starves, and services like YouTube end the
+        broadcast within about a minute - which costs the operator far more
+        than the slate's CPU ever would.
+        """
+        if self._downstream_rtmp and self._settings.get_bool("slate_keep_for_rtmp"):
+            return 0
+        return self._settings.get_int("slate_max_seconds")
 
     async def _update_slate(self) -> None:
         """Start, keep, or stop the slate based on how long we have been down.
@@ -301,7 +599,7 @@ class StreamSupervisor:
         down_for = (
             time.monotonic() - self._down_since if self._down_since else 0.0
         )
-        if not slate_within_limit(down_for, self._settings.get_int("slate_max_seconds")):
+        if not slate_within_limit(down_for, self._slate_limit()):
             if self._slate is not None:
                 logger.info(
                     "channel %s: outage over slate limit - stopping the slate",
@@ -320,12 +618,23 @@ class StreamSupervisor:
             if self._slate.running:
                 return
             await self._stop_slate()
-        assert self._mediamtx is not None
+        if self._seamless and self._relay_port:
+            slate_target = relay_output_url(self._relay_port)
+            profile: SeamlessProfile | None = self._profile()
+            slate_format = "mpegts"
+        elif self._mediamtx is not None:
+            slate_target = self._mediamtx.ingest_url(self.channel_id)
+            profile = None
+            slate_format = "flv"
+        else:
+            return
         try:
             self._slate = await self._ffmpeg.spawn_slate(
                 self.channel_id,
-                output_url=self._mediamtx.ingest_url(self.channel_id),
+                output_url=slate_target,
                 image_path=self._settings.get_str("slate_path"),
+                profile=profile,
+                output_format=slate_format,
             )
             logger.info("channel %s: slate up while reconnecting", self.channel_id)
         except Exception as exc:  # noqa: BLE001 - slate must never break recovery
@@ -353,6 +662,7 @@ class StreamSupervisor:
             return
         if self._egress is not None:
             await self._stop_egress()
+        self._egress_last_start = time.monotonic()
         try:
             self._egress = await self._ffmpeg.spawn_egress(
                 self.channel_id,
@@ -431,20 +741,45 @@ class StreamSupervisor:
     ) -> bool:
         """Spawn FFmpeg and confirm output actually starts flowing."""
         assert outcome.stream is not None
-        # The slate and the real ingest publish to the same buffer path, so the
-        # slate must let go before FFmpeg takes it over.
+        # The slate and the real ingest publish to the same path (or the same
+        # relay), so the slate must let go before FFmpeg takes over.
         await self._stop_slate()
         mode = channel.stream_mode or self._settings.get_str("default_stream_mode")
+
+        # Seamless channels do not publish directly: they encode to the shared
+        # profile and feed the local relay, and the publisher behind it - which
+        # survives this process - is what talks to the real destination.
+        profile: SeamlessProfile | None = None
+        target = output_url
+        spawn_format = "flv"
+        if self._seamless:
+            profile = self._profile()
+            spawn_format = "mpegts"
+            if not self._relay_port:
+                try:
+                    self._relay_port = pick_relay_port(
+                        self._settings.get_int("relay_port_base")
+                    )
+                except OSError as exc:
+                    self.last_error = f"seamless relay unavailable: {exc}"
+                    await self._set_state(ChannelState.OFFLINE, error=self.last_error)
+                    return False
+            target = relay_output_url(self._relay_port)
+            mode = "transcode"
+
         try:
             process = await self._ffmpeg.spawn(
                 self.channel_id,
                 stream=outcome.stream,
-                output_url=output_url,
+                output_url=target,
                 mode=mode,
                 probe=outcome.probe,
                 video_bitrate=self._settings.get_str("transcode_video_bitrate"),
                 audio_bitrate=self._settings.get_str("transcode_audio_bitrate"),
                 preset=self._settings.get_str("transcode_preset"),
+                hardware=self._settings.get_str("transcode_hardware"),
+                profile=profile,
+                output_format=spawn_format,
             )
         except FileNotFoundError:
             message = (
@@ -475,14 +810,33 @@ class StreamSupervisor:
             )
             return False
 
+        # On a seamless channel the publisher is the process that proves the
+        # destination accepted data, so it has to be up before we can confirm.
+        confirm_on = process
+        if self._seamless:
+            if not await self._ensure_publisher(output_url):
+                self.last_error = (
+                    self.last_error or "the seamless publisher would not start"
+                )
+                await self._teardown(self.last_error)
+                await self._set_state(ChannelState.OFFLINE, error=self.last_error)
+                return False
+            assert self._publisher is not None
+            confirm_on = self._publisher
+
         # Is data actually reaching the output endpoint?
-        if not await self._confirm_output(process):
+        if not await self._confirm_output(confirm_on):
             self.last_error = (
-                process.last_error or "no data reached the output destination"
+                confirm_on.last_error or "no data reached the output destination"
             )
             # The process may still be alive and holding the buffer path; stop
             # it so the retry (or the slate) can publish cleanly.
             await self._teardown(self.last_error)
+            if self._seamless:
+                # A publisher that never delivered anything is not worth
+                # keeping: _ensure_publisher would otherwise reuse it forever
+                # because it is technically still running.
+                await self._stop_publisher()
             await self._set_state(ChannelState.OFFLINE, error=self.last_error)
             return False
 
@@ -518,6 +872,59 @@ class StreamSupervisor:
         self._backoff.reset()
         self.consecutive_failures = 0
         return True
+
+    async def _ensure_publisher(self, output_url: str) -> bool:
+        """Start the long-lived publisher, or keep the one already running.
+
+        Keeping it is the entire point of seamless mode: the RTMP session it
+        holds is what the downstream server and every connected player see, and
+        it must not be interrupted just because the source behind it changed.
+        """
+        if (
+            self._publisher is not None
+            and self._publisher.running
+            and self._publisher_target == output_url
+        ):
+            return True
+        await self._stop_publisher()
+        try:
+            self._publisher = await self._ffmpeg.spawn_publisher(
+                self.channel_id,
+                input_url=relay_input_url(self._relay_port),
+                output_url=output_url,
+            )
+        except (OSError, FileNotFoundError) as exc:
+            self.last_error = f"could not start the seamless publisher: {exc}"
+            self._publisher = None
+            return False
+        self._publisher_target = output_url
+        if not await self._survives_startup(self._publisher):
+            self.last_error = (
+                self._publisher.last_error or "the seamless publisher exited at startup"
+            )
+            await self._stop_publisher()
+            return False
+        return True
+
+    async def _stop_publisher(self) -> None:
+        publisher = self._publisher
+        self._publisher = None
+        self._publisher_target = ""
+        if publisher is not None:
+            try:
+                await publisher.stop("publisher stopped")
+            except Exception:  # noqa: BLE001
+                logger.debug("channel %s: publisher stop error", self.channel_id)
+
+    async def _stop_shadow(self) -> None:
+        shadow = self._shadow
+        self._shadow = None
+        self._shadow_deadline = 0.0
+        if shadow is not None:
+            try:
+                await shadow.stop("shadow run finished")
+            except Exception:  # noqa: BLE001
+                logger.debug("channel %s: shadow stop error", self.channel_id)
 
     async def _survives_startup(self, process: FFmpegProcess) -> bool:
         deadline = time.monotonic() + STARTUP_GRACE_SECONDS
@@ -564,6 +971,8 @@ class StreamSupervisor:
         stall_timeout = self._settings.get_int("stall_timeout_seconds")
         threshold = max(1, self._settings.get_int("failure_threshold"))
         next_deep_check = time.monotonic() + deep_interval
+        min_stable = max(1, self._settings.get_int("failover_min_stable_seconds"))
+        counted_stable = False
         self.consecutive_failures = 0
 
         while True:
@@ -582,13 +991,46 @@ class StreamSupervisor:
             # Keep the egress (buffer -> final server) alive on its own. Its
             # death must NOT restart the whole channel - just relaunch the relay
             # so the downstream server keeps getting the stream.
-            if self._egress_target and (
-                self._egress is None or not self._egress.running
+            if (
+                self._egress_target
+                and (self._egress is None or not self._egress.running)
+                and time.monotonic() - self._egress_last_start > 10.0
             ):
+                # The 10s guard stops a tight restart loop when the final server
+                # itself is unreachable (egress would die on start every time).
                 logger.info(
                     "channel %s: egress relay is down - restarting it", self.channel_id
                 )
                 await self._start_egress(self._egress_target)
+
+            # The seamless publisher holds the session the destination and the
+            # players are attached to. Losing it defeats the whole mode, so it
+            # is brought back immediately rather than on the next channel cycle.
+            if self._seamless and self._publisher_target:
+                target = self._publisher_target
+                if self._publisher is None or not self._publisher.running:
+                    logger.warning(
+                        "channel %s: seamless publisher died - restarting it",
+                        self.channel_id,
+                    )
+                    if not await self._ensure_publisher(target):
+                        return "seamless publisher could not be restarted"
+
+            # A source that has held this long is working, whatever it did
+            # before; clearing the streak here is what keeps an old flap from
+            # counting towards a failover hours later.
+            if not counted_stable and process.uptime_seconds >= min_stable:
+                counted_stable = True
+                self._failover.record_stable(self._active_index)
+                self._tried_while_down.clear()
+
+            # ---- on a backup: has the primary earned its way back? ------
+            if self._active_index != 0:
+                switch_reason = await self._failback_tick()
+                if switch_reason:
+                    self._switch_to = 0
+                    self._switch_is_failback = True
+                    return switch_reason
 
             if process.is_stalled(stall_timeout):
                 await self._event(
@@ -643,6 +1085,94 @@ class StreamSupervisor:
                         error=self.last_error or "source re-check failing (output still live)",
                     )
 
+    async def _failback_tick(self) -> str:
+        """One step of "is the primary trustworthy again?".
+
+        Deliberately non-blocking: the shadow run takes a minute or more, and
+        the fast process monitor must keep watching the backup that is actually
+        on air the whole time.  Each call does at most one probe or one check
+        of a shadow already running.
+        """
+        now = time.monotonic()
+
+        # A shadow run in progress is the final gate - nothing else matters.
+        if self._shadow is not None:
+            if not self._shadow.running:
+                detail = self._shadow.last_error or "shadow run ended early"
+                await self._stop_shadow()
+                self._failover.reset_primary_health()
+                logger.info(
+                    "channel %s: primary failed its shadow run (%s)",
+                    self.channel_id,
+                    detail,
+                )
+                return ""
+            if now >= self._shadow_deadline:
+                flowing = self._shadow.metrics.out_time_us > 0
+                await self._stop_shadow()
+                if flowing:
+                    return (
+                        "primary probed clean for "
+                        f"{int(self._failover.primary_healthy_for())}s and held a shadow run"
+                    )
+                self._failover.reset_primary_health()
+                logger.info(
+                    "channel %s: primary shadow run produced no output",
+                    self.channel_id,
+                )
+            return ""
+
+        if now < self._failback_next_probe:
+            return ""
+        self._failback_next_probe = now + max(
+            15, self._settings.get_int("failback_probe_interval_seconds")
+        )
+
+        channel = await self._load()
+        if channel is None or not self._auto_failback_enabled(channel):
+            return ""
+        self._failover.configure(failback_after_seconds=self._failback_after(channel))
+
+        # A quiet probe: the primary is not being pulled right now, so a second
+        # connection to it is safe and tells us something real.
+        outcome = await self._resolver.resolve(channel, force=True, validate=True)
+        self._failover.record_primary_probe(outcome.ok)
+        if not outcome.ok:
+            logger.debug(
+                "channel %s: primary still unhealthy (%s)", self.channel_id, outcome.error
+            )
+            return ""
+        if not self._failover.failback_ready():
+            logger.debug(
+                "channel %s: primary healthy for %ds of %ds needed",
+                self.channel_id,
+                int(self._failover.primary_healthy_for()),
+                int(self._failover.required_healthy_seconds()),
+            )
+            return ""
+
+        # Probing proves the first seconds parse, not that the stream lasts.
+        shadow_seconds = self._settings.get_int("failback_shadow_seconds")
+        if shadow_seconds <= 0 or outcome.stream is None:
+            return f"primary probed clean for {int(self._failover.primary_healthy_for())}s"
+        try:
+            self._shadow = await self._ffmpeg.spawn_watch(
+                self.channel_id, stream=outcome.stream
+            )
+        except (OSError, FileNotFoundError) as exc:
+            logger.warning(
+                "channel %s: could not start the shadow run: %s", self.channel_id, exc
+            )
+            self._shadow = None
+            return ""
+        self._shadow_deadline = now + shadow_seconds
+        logger.info(
+            "channel %s: primary looks healthy - shadow running it for %ds",
+            self.channel_id,
+            shadow_seconds,
+        )
+        return ""
+
     async def _deep_check(self, stream: Any) -> bool:
         """One ffprobe against the current source URL."""
         if stream is None:
@@ -662,6 +1192,12 @@ class StreamSupervisor:
 
     # ------------------------------------------------------------------ #
     async def _teardown(self, reason: str) -> None:
+        """Stop the source process only.
+
+        The slate, the egress and (on a seamless channel) the publisher all
+        deliberately outlive this: they are what keeps the output alive while
+        a new source is brought up behind them.
+        """
         process = self._process
         if process is not None:
             await process.stop(reason)
@@ -682,6 +1218,30 @@ class StreamSupervisor:
         await self._set_state(ChannelState.RECONNECTING, error=reason)
         await run_db(crud.increment_restart_count, self.channel_id)
 
+        self._sources = build_sources(channel)
+        self._seamless = self._seamless_wanted(channel)
+        self._downstream_rtmp = channel.resolved_rtmp(
+            self._settings.get_str("default_rtmp_server")
+        )
+        self._failover.configure(failover_after_seconds=self._failover_after(channel))
+
+        # A primary that breaks again right after we returned to it has not
+        # really recovered; make the next failback earn a much longer proof.
+        if self._active_index == 0 and self._failed_back_at:
+            since = time.monotonic() - self._failed_back_at
+            window = self._settings.get_int("failback_penalty_window_seconds")
+            self._failed_back_at = 0.0
+            if window > 0 and since <= window:
+                required = self._failover.penalise()
+                message = (
+                    f"primary failed again {int(since)}s after switching back - "
+                    f"the next return now needs {int(required)}s of clean probes"
+                )
+                logger.info("channel %s: %s", self.channel_id, message)
+                await self._event(EventType.SOURCE_FAILOVER, message, level="warning")
+            else:
+                self._failover.forgive()
+
         # Put a "reconnecting" screen on the viewer output while we work behind
         # the scenes. It comes down on its own once the outage passes the slate
         # limit, so a source that is off for hours stops burning CPU.
@@ -697,6 +1257,19 @@ class StreamSupervisor:
         else:
             await run_db(crud.bump_downtime_attempts, self.channel_id)
 
+        # ---- try a different source before waiting on this one again ----
+        switched = False
+        if self._failover_enabled() and self._failover.should_leave(self._active_index):
+            target = FailoverPolicy.next_index(self._active_index, len(self._sources))
+            if target != self._active_index:
+                detail = self._failover.leave_reason(self._active_index)
+                self._switch_to = target
+                await self._apply_switch(detail)
+                switched = True
+                # The new source deserves a prompt first attempt rather than
+                # inheriting the delay the broken one had built up.
+                self._backoff.reset()
+
         # Restart-loop protection.
         self._circuit.record_restart()
         if self._circuit.tripped:
@@ -711,11 +1284,37 @@ class StreamSupervisor:
         else:
             delay = self._backoff.next_delay()
 
+        # Once every source has been tried and none of them worked, say so
+        # once, then stop hammering origins that are plainly not coming back.
+        if len(self._sources) > 1 and not switched:
+            if (
+                len(self._tried_while_down) >= len(self._sources)
+                and not self._all_down_announced
+            ):
+                self._all_down_announced = True
+                message = (
+                    f"all {len(self._sources)} sources are unavailable: {reason}"
+                )
+                await self._event(EventType.ALL_SOURCES_DOWN, message, level="error")
+                await self._notify_all_down(message)
+
+        if self._down_since is not None and not switched:
+            delay = slow_retry_delay(
+                time.monotonic() - self._down_since,
+                normal_delay=delay,
+                slow_after_seconds=self._settings.get_int("all_down_slow_after_seconds"),
+                slow_delay_seconds=self._settings.get_int("all_down_retry_delay_seconds"),
+            )
+
         # The next attempt must ask the provider for a brand-new URL.
         self._force_refresh = True
 
         logger.info(
-            "channel %s: retrying in %.0fs (%s)", self.channel_id, delay, reason
+            "channel %s: retrying %s in %.0fs (%s)",
+            self.channel_id,
+            self.active_source.name,
+            delay,
+            reason,
         )
         await self._sleep(delay)
         if self._stop_event.is_set():
@@ -785,6 +1384,8 @@ class StreamSupervisor:
         attempts = (record.attempts + 1) if record is not None else 1
         self._down_since = None
         self._circuit.reset()
+        self._tried_while_down.clear()
+        self._all_down_announced = False
         await self._event(
             EventType.STREAM_RECOVERED,
             f"recovered after {int(downtime)}s and {attempts} attempt(s)",
@@ -832,6 +1433,32 @@ class StreamSupervisor:
         except Exception:  # noqa: BLE001
             logger.exception("telegram notification failed (unstable)")
 
+    async def _notify_failover(
+        self, source_name: str, detail: str, *, back_to_primary: bool
+    ) -> None:
+        if self._notifier is None:
+            return
+        try:
+            await self._notifier.channel_failover(
+                self.channel_id,
+                self.channel_name,
+                source_name,
+                detail,
+                back_to_primary=back_to_primary,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("telegram notification failed (failover)")
+
+    async def _notify_all_down(self, detail: str) -> None:
+        if self._notifier is None:
+            return
+        try:
+            await self._notifier.channel_all_sources_down(
+                self.channel_id, self.channel_name, detail
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("telegram notification failed (all sources down)")
+
     async def _notify_auth_error(self, error: str) -> None:
         if self._notifier is None:
             return
@@ -864,6 +1491,16 @@ class StreamSupervisor:
             ),
             "ffmpeg": process.describe() if process else None,
             "consecutive_failures": self.consecutive_failures,
+            "source_count": len(self._sources),
+            "active_source_index": self._active_index,
+            "active_source": self.active_source.name,
+            "on_fallback": self.on_fallback,
+            "seamless": self._seamless,
+            "primary_healthy_seconds": round(self._failover.primary_healthy_for()),
+            "failback_eta_seconds": (
+                round(self._failover.failback_eta()) if self.on_fallback else None
+            ),
+            "failback_shadow_running": self._shadow is not None,
             "restarts_in_window": self._circuit.restarts_in_window,
             "unstable": self._circuit.tripped,
             "backoff_attempt": self._backoff.attempt,

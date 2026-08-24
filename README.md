@@ -31,6 +31,7 @@ its own URL when it breaks — the other channels keep running untouched.
 - [Using the dashboard](#using-the-dashboard)
 - [Telegram notifications](#telegram-notifications)
 - [How recovery works](#how-recovery-works)
+- [Backup sources (failover)](#backup-sources-failover)
 - [Anti-drop buffer (MediaMTX)](#anti-drop-buffer-mediamtx)
 - [Start on boot (unattended box)](#start-on-boot-unattended-box)
 - [HTTP API](#http-api)
@@ -417,6 +418,99 @@ and the database, and leaves no zombie processes, on both Windows and macOS.
 
 ---
 
+## Backup sources (failover)
+
+A channel can hold standby media URLs next to its primary source. When the
+primary stays broken the relay moves to the next one on its own, and only
+returns to the primary once that has proven itself again.
+
+Add them per channel: **dashboard → channel → Edit → *Backup source URLs***,
+one media URL per line — typically a direct `.m3u8` on another host:
+
+```
+https://godtv.example/play?id=7424          <- the primary (Source endpoint URL)
+http://43.249.32.198:8080/memfs/d71f….m3u8  <- a backup, in the textarea
+```
+
+### When it leaves the primary
+
+Either condition is enough, whichever comes first:
+
+- the primary has been down for `FAILOVER_AFTER_SECONDS` (default **120**), or
+- `FAILOVER_FAILURE_THRESHOLD` starts in a row (default **3**) died before
+  lasting `FAILOVER_MIN_STABLE_SECONDS`.
+
+The second rule exists because of the flapping case: a channel that comes up
+for twenty seconds and dies keeps resetting the timer, so a pure duration
+threshold would never fire, however broken the source actually is.
+
+120 seconds is roughly three to five full retry cycles — enough to be sure,
+without spending long enough for the restart circuit breaker to trip first
+(`RESTART_WINDOW_THRESHOLD` restarts in `RESTART_WINDOW_SECONDS`). Raise it if
+your primary typically recovers on its own within a minute or two.
+
+### When it comes back
+
+Coming back is deliberately much stricter than leaving, because the switch
+itself costs viewers a glitch and there is no prize for taking it early:
+
+1. while a backup is on air, the primary is quietly probed every
+   `FAILBACK_PROBE_INTERVAL_SECONDS` (default 60) — it is not being pulled at
+   that moment, so a second connection to it is safe and means something;
+2. it must pass for `FAILBACK_AFTER_SECONDS` (default **600**) **unbroken** —
+   one failed probe restarts the count from zero;
+3. then it must survive a `FAILBACK_SHADOW_SECONDS` (default **90**) shadow
+   run: the real stream, pulled and discarded, because a probe that passes only
+   proves the first seconds parsed.
+
+If the primary breaks again within `FAILBACK_PENALTY_WINDOW_SECONDS` of a
+failback, the required healthy period **doubles** (600 → 1200 → 2400 → capped
+at `FAILBACK_PENALTY_MAX_SECONDS`). That is what stops a channel ping-ponging
+between two half-working sources.
+
+`AUTO_FAILBACK` is **off** by default. The channel page shows a green badge
+when the primary is ready and a **Back to primary** button, so the operator
+picks the moment. Turn it on globally in Settings, or per channel on the Edit
+form.
+
+### When nothing works
+
+Every source is tried in turn, forever — the channel is never given up on:
+
+- one `all_sources_down` event and one Telegram alert per outage, not per retry;
+- after `ALL_DOWN_SLOW_AFTER_SECONDS` (default 900) retries slow to
+  `ALL_DOWN_RETRY_DELAY_SECONDS` (default 300) instead of hammering origins
+  that are plainly not back yet;
+- the "reconnecting" slate keeps the output alive throughout. For a channel
+  pushing to a downstream RTMP server this matters more than it looks:
+  `SLATE_KEEP_FOR_RTMP` (default on) ignores `SLATE_MAX_SECONDS` for those
+  channels, because if the push starves, services like YouTube end the
+  broadcast within about a minute and the stream has to be started over.
+
+### Seamless switching (per channel)
+
+By default a switch is a fast cut: the new source is verified, then swapped in.
+The gap is a second or two, which the HLS buffer usually hides from viewers,
+but a downstream RTMP push does notice it.
+
+Tick **Seamless switching** on a channel to remove that gap entirely. One
+publisher process is kept alive across every switch and fed over a local UDP
+relay, so MediaMTX, connected players and the downstream service never see the
+publisher disconnect:
+
+```
+feeder ffmpeg (source / slate)  --MPEG-TS/UDP-->  publisher ffmpeg  --RTMP-->  destination
+   ^ replaced on every switch                        ^ never restarts
+```
+
+The trade-off is real and worth understanding: the publisher copies packets, so
+**every source must be re-encoded to one profile** (`SEAMLESS_VIDEO_SIZE`,
+`SEAMLESS_FPS`, the transcode bitrates). That costs CPU per channel and
+overrides copy mode. Use it for the channels that matter — the ones pushing to
+YouTube — rather than everywhere.
+
+---
+
 ## Anti-drop buffer (MediaMTX)
 
 By default each channel relays straight to your RTMP endpoint, so a source
@@ -466,6 +560,10 @@ nothing breaks in the meantime.
 
 Ports (all configurable): RTMP `1935`, HLS `8888`, API `9997`. Set **Viewer
 host / IP** to the address players use to reach the machine (e.g. your LAN IP).
+
+To let other devices on the network watch, open the ports on Windows Firewall
+by running **`firewall_open.bat`** as administrator (and `firewall_close.bat`
+to undo). On the same machine (`127.0.0.1`) no firewall change is needed.
 
 ---
 

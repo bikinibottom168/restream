@@ -37,6 +37,39 @@
   </div>
 </div>
 
+{% if unstable %}
+<div class="card mt-3 border-warning">
+  <div class="card-header">{{ t('Unstable channels (24h)') }}</div>
+  <div class="table-responsive">
+    <table class="table table-sm mb-0 smaller align-middle">
+      <thead>
+        <tr>
+          <th>{{ t('Channel name') }}</th>
+          <th class="text-end">{{ t('Uptime 24h') }}</th>
+          <th class="text-end">{{ t('Outages') }}</th>
+          <th>{{ t('Likely cause') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in unstable %}
+        <tr>
+          <td><a href="/channels/{{ c.id }}">{{ c.name }}</a></td>
+          <td class="text-end">
+            <span class="{{ 'text-danger' if c.uptime_24h < 95 else 'text-warning' }}">{{ c.uptime_24h }}%</span>
+          </td>
+          <td class="text-end">{{ c.outages_24h }}</td>
+          <td class="text-secondary">{{ c.last_error_explained or c.last_error or '-' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="card-footer smaller text-secondary">
+    🇹🇭 ช่องที่หลุดบ่อยใน 24 ชม. — ถ้า "สาเหตุ" บอกให้ลอง transcode ให้เปิดโหมด transcode เฉพาะช่องนั้น (ตอนนี้มีตัวเร่ง GPU แล้ว)
+  </div>
+</div>
+{% endif %}
+
 <form class="row g-2 align-items-center my-3" method="get" action="/">
   <div class="col-12 col-md-5">
     <input type="search" class="form-control" name="q" value="{{ search }}" placeholder="{{ t('Search channel...') }}">

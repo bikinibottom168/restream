@@ -115,6 +115,22 @@ class Channel(Base):
     #: answers with the media URL. One channel, one URL. When set it overrides
     #: any provider-wide URL template.
     resolve_url: Mapped[str] = mapped_column(Text, default="", nullable=False)
+
+    # ---- backup sources -------------------------------------------------
+    #: JSON array of standby media URLs used when the primary source stays
+    #: broken. See :mod:`app.streaming.failover` for the shapes accepted.
+    fallback_urls: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    #: Which source is on air right now: 0 = primary, 1..n = that fallback.
+    active_source_index: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    #: Per-channel overrides for the failover timings. 0 = use the global value.
+    failover_after_seconds: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    failback_after_seconds: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    #: 'inherit' | 'on' | 'off' - whether this channel returns to the primary
+    #: on its own once the primary proves itself healthy again.
+    auto_failback: Mapped[str] = mapped_column(String(16), default="inherit", nullable=False)
+    #: Keep one publisher alive across source switches so downstream players
+    #: never disconnect. Costs a re-encode per channel; see app.streaming.relay.
+    seamless_switch: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     #: Per-channel playback hints handed to FFmpeg.
     playback_referer: Mapped[str] = mapped_column(String(1024), default="", nullable=False)
     playback_user_agent: Mapped[str] = mapped_column(String(512), default="", nullable=False)
@@ -208,6 +224,9 @@ class EventType(str):
     SOURCE_REFRESHED = "source_refreshed"
     SOURCE_FAILED = "source_failed"
     SOURCE_UNSUPPORTED = "source_unsupported"
+    SOURCE_FAILOVER = "source_failover"
+    SOURCE_FAILBACK = "source_failback"
+    ALL_SOURCES_DOWN = "all_sources_down"
     PROVIDER_AUTH_OK = "provider_auth_ok"
     PROVIDER_AUTH_FAILED = "provider_auth_failed"
     CHANNEL_ADDED = "channel_added"

@@ -213,7 +213,53 @@ THAI: dict[str, str] = {
     "Advanced login options": "ตัวเลือกล็อกอินเพิ่มเติม",
     "Test login": "ทดสอบล็อกอิน",
     "Anti-drop buffer": "บัฟเฟอร์กันหลุด",
+    # ---- backup sources / failover ------------------------------------
+    "Backup sources (failover)": "ช่องสำรอง (สลับอัตโนมัติ)",
+    "Backup source URLs": "URL ช่องสำรอง",
+    "One media URL per line, tried in order when the primary stays broken.":
+        "ใส่ URL สื่อบรรทัดละหนึ่งอัน จะไล่ใช้ตามลำดับเมื่อช่องหลักใช้ไม่ได้",
+    "Switch to a backup URL when the primary source stays broken":
+        "สลับไปใช้ URL สำรองเมื่อช่องหลักล่มค้าง",
+    "Switch to backup after (s)": "สลับไปช่องสำรองหลัง (วินาที)",
+    "...or failed attempts in a row": "...หรือล้มเหลวติดกันกี่ครั้ง",
+    "Counts as working after (s)": "ถือว่าใช้ได้เมื่ออยู่ได้ครบ (วินาที)",
+    "Return to the primary automatically": "กลับไปช่องหลักอัตโนมัติ",
+    "Return to primary after (s)": "กลับไปช่องหลักหลัง (วินาที)",
+    "Primary probe interval (s)": "รอบตรวจช่องหลัก (วินาที)",
+    "Shadow run before returning (s)": "ทดลองดึงจริงก่อนสลับกลับ (วินาที)",
+    "Repeat-failure window (s)": "ช่วงนับว่าพังซ้ำ (วินาที)",
+    "Slow down when all sources are down after (s)":
+        "ลดความถี่เมื่อล่มทุกช่องนานเกิน (วินาที)",
+    "Slow retry delay (s)": "ความถี่ในโหมดช้า (วินาที)",
+    "Never stop the slate for channels that push to an RTMP server":
+        "อย่าหยุดสเลทสำหรับช่องที่ยิงออก RTMP ปลายทาง",
+    "Seamless switch resolution": "ความละเอียดโหมดสลับไม่สะดุด",
+    "Seamless fps": "เฟรมเรตโหมดสลับไม่สะดุด",
+    "Relay port base": "พอร์ตเริ่มต้นของรีเลย์",
+    "Automatic return to primary": "กลับไปช่องหลักอัตโนมัติ",
+    "Use the global setting": "ใช้ค่ากลาง",
+    "Seamless switching (players never disconnect)":
+        "สลับแบบไม่สะดุด (เครื่องเล่นไม่หลุด)",
+    "Keeps one publisher alive across source switches. Re-encodes every source to one profile, so it costs CPU and overrides copy mode.":
+        "คงตัวส่งออกไว้ตัวเดียวตลอดการสลับ ต้องแปลงทุกต้นทางให้เป็นค่าเดียวกัน จึงกิน CPU และจะไม่ใช้โหมด copy",
+    "Source in use": "ช่องที่ใช้อยู่",
+    "BACKUP": "สำรอง",
+    "PRIMARY": "หลัก",
+    "Back to primary": "กลับไปช่องหลัก",
+    "Use backup now": "ใช้ช่องสำรองตอนนี้",
+    "Running on a backup source": "กำลังใช้ช่องสำรอง",
+    "backup(s) ready": "ช่องสำรองพร้อมใช้",
+    "Testing the primary now...": "กำลังทดสอบช่องหลัก...",
+    "Primary healthy for": "ช่องหลักปกติมาแล้ว",
+    "auto return in": "จะกลับอัตโนมัติในอีก",
     "MediaMTX log": "บันทึก MediaMTX",
+    "Unstable channels (24h)": "ช่องที่ไม่เสถียร (24 ชม.)",
+    "Uptime 24h": "ออนไลน์ 24 ชม.",
+    "Outages": "จำนวนหลุด",
+    "Likely cause": "สาเหตุที่น่าจะเป็น",
+    "Transcode encoder": "ตัวเข้ารหัส transcode",
+    "Auto (use GPU if available)": "อัตโนมัติ (ใช้ GPU ถ้ามี)",
+    "Software (CPU / x264)": "ซอฟต์แวร์ (CPU / x264)",
     "Start on boot": "เปิดอัตโนมัติเมื่อเปิดเครื่อง",
     "on": "เปิด",
     "Starts the app automatically when the computer boots (after login) and restarts it if it ever crashes. No administrator rights needed.": "เปิดโปรแกรมอัตโนมัติเมื่อเปิดเครื่อง (หลังล็อกอิน) และรีสตาร์ทให้เองถ้าโปรแกรมหลุด ไม่ต้องใช้สิทธิ์ admin",
@@ -400,6 +446,55 @@ THAI: dict[str, str] = {
 }
 
 TRANSLATIONS: dict[str, dict[str, str]] = {"th": THAI}
+
+
+#: (keyword found in an error, Thai plain-language explanation). First match
+#: wins, so put the more specific patterns first.
+_ERROR_HINTS: tuple[tuple[str, str], ...] = (
+    ("address already in use", "พอร์ตชนกับโปรแกรมอื่น เปลี่ยนพอร์ตหรือปิดตัวที่ใช้อยู่"),
+    ("403", "โทเคน/สิทธิ์หมดอายุ ระบบจะล็อกอินและดึงลิงก์ใหม่ให้เอง"),
+    ("forbidden", "โทเคน/สิทธิ์หมดอายุ ระบบจะล็อกอินและดึงลิงก์ใหม่ให้เอง"),
+    ("401", "ต้องล็อกอินใหม่ (session หมดอายุ)"),
+    ("unauthorized", "ต้องล็อกอินใหม่ (session หมดอายุ)"),
+    ("404", "ปลายทางไม่พบสตรีม (URL/พาธผิด หรือช่องต้นทางปิด)"),
+    ("not found", "ปลายทางไม่พบสตรีม (URL/พาธผิด หรือช่องต้นทางปิด)"),
+    ("connection refused", "ต่อปลายทางไม่ได้ (เซิร์ฟเวอร์/พอร์ตปิด หรือ MediaMTX ไม่ทำงาน)"),
+    ("connection reset", "ปลายทางตัดการเชื่อมต่อ (เน็ตหรือเซิร์ฟเวอร์ปลายทางมีปัญหา)"),
+    ("broken pipe", "ปลายทางตัดการเชื่อมต่อ (เน็ตหรือเซิร์ฟเวอร์ปลายทางมีปัญหา)"),
+    ("non-monotonous dts", "timestamp ต้นทางเพี้ยน — ลองเปิด transcode ช่องนี้"),
+    ("invalid timestamp", "timestamp ต้นทางเพี้ยน — ลองเปิด transcode ช่องนี้"),
+    ("stalled", "ภาพขาออกไม่วิ่ง (ต้นทางค้าง หรือปลายทางรับไม่ทัน)"),
+    ("no output progress", "ภาพขาออกไม่วิ่ง (ต้นทางค้าง หรือปลายทางรับไม่ทัน)"),
+    ("no data reached", "ไม่มีข้อมูลถึงปลายทาง (เช็ก URL ปลายทาง/บัฟเฟอร์)"),
+    ("i/o error", "เปิดปลายทางไม่ได้ (เช่น MediaMTX ไม่ทำงาน หรือพอร์ตชน)"),
+    ("timed out", "หมดเวลารอต้นทาง (เน็ตช้า หรือต้นทางไม่ตอบ)"),
+    ("timeout", "หมดเวลารอต้นทาง (เน็ตช้า หรือต้นทางไม่ตอบ)"),
+    ("exited during startup", "FFmpeg เริ่มไม่ติด (เช็ก URL ต้นทาง/ปลายทาง)"),
+    ("exited immediately", "FFmpeg เริ่มไม่ติด (เช็ก URL ต้นทาง/ปลายทาง)"),
+    ("expired", "ลิงก์ต้นทางหมดอายุ ระบบดึงลิงก์ใหม่ให้เอง"),
+    ("csrf", "ล็อกอินไม่ผ่าน (ตรวจหน้าฟอร์ม/CSRF)"),
+    ("login", "ล็อกอินไม่ผ่าน (ตรวจชื่อผู้ใช้/รหัสผ่าน/ชื่อฟิลด์)"),
+    ("no stream url", "หาลิงก์สตรีมใน response ไม่เจอ (ตั้ง JSON field หรือใช้ auto)"),
+    ("drm", "สื่อมี DRM — ระบบไม่รองรับ (โดยตั้งใจ)"),
+    ("widevine", "สื่อมี DRM — ระบบไม่รองรับ (โดยตั้งใจ)"),
+    ("ffmpeg not found", "ไม่พบ FFmpeg (ตั้งค่า path หรือวางไฟล์ใน bin/)"),
+    ("unreachable", "ต้นทางติดต่อไม่ได้ชั่วคราว ระบบจะลองใหม่ให้"),
+)
+
+
+def explain_stream_error(text: str) -> str:
+    """Turn a raw FFmpeg/pipeline error into one plain-language Thai line.
+
+    Returns '' when nothing matches, so the caller can fall back to the raw
+    message. Purely advisory - it never changes behaviour.
+    """
+    if not text:
+        return ""
+    lowered = text.lower()
+    for keyword, hint in _ERROR_HINTS:
+        if keyword in lowered:
+            return hint
+    return ""
 
 
 def normalise(code: str | None) -> str:

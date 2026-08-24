@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shlex
 import sys
 import time
@@ -42,6 +43,18 @@ TERMINATE_TIMEOUT = 5.0
 STDERR_RING = 200
 
 
+#: Hardware H.264 encoders, best-first. The first one FFmpeg reports is used
+#: for "auto" - each offloads encoding off the CPU so a modest box can
+#: transcode several channels for stability.
+HW_ENCODER_PREFERENCE: tuple[str, ...] = (
+    "h264_videotoolbox",  # macOS (Apple Silicon + Intel)
+    "h264_nvenc",         # NVIDIA
+    "h264_qsv",           # Intel QuickSync
+    "h264_amf",           # AMD
+    "h264_v4l2m2m",       # some ARM SBCs
+)
+
+
 @dataclass(slots=True)
 class FFmpegCapabilities:
     """What the installed FFmpeg build actually supports."""
@@ -51,7 +64,15 @@ class FFmpegCapabilities:
     reconnect_streamed: bool = False
     reconnect_delay_max: bool = False
     reconnect_on_network_error: bool = False
+    hw_encoders: list[str] = field(default_factory=list)
     detected: bool = False
+
+    def best_hw_encoder(self) -> str:
+        """The preferred available hardware encoder, or '' if none."""
+        for name in HW_ENCODER_PREFERENCE:
+            if name in self.hw_encoders:
+                return name
+        return ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -60,6 +81,8 @@ class FFmpegCapabilities:
             "reconnect_streamed": self.reconnect_streamed,
             "reconnect_delay_max": self.reconnect_delay_max,
             "reconnect_on_network_error": self.reconnect_on_network_error,
+            "hw_encoders": list(self.hw_encoders),
+            "best_hw_encoder": self.best_hw_encoder(),
         }
 
 
@@ -95,14 +118,127 @@ async def detect_capabilities(ffmpeg_path: str, timeout: float = 15.0) -> FFmpeg
     caps.reconnect_streamed = "reconnect_streamed" in text
     caps.reconnect_delay_max = "reconnect_delay_max" in text
     caps.reconnect_on_network_error = "reconnect_on_network_error" in text
+    caps.hw_encoders = await _detect_hw_encoders(ffmpeg_path, timeout=timeout)
     caps.detected = True
     logger.info("ffmpeg capabilities: %s", caps.as_dict())
     return caps
 
 
+async def _detect_hw_encoders(ffmpeg_path: str, timeout: float = 15.0) -> list[str]:
+    """Hardware H.264 encoders that actually WORK on this machine.
+
+    A build can advertise ``h264_nvenc`` with no NVIDIA card present, which
+    would make every transcode fail. So each advertised encoder is confirmed
+    with a tiny real test-encode; only the ones that succeed are returned, and
+    "auto" is therefore always safe.
+    """
+    try:
+        process = await asyncio.create_subprocess_exec(
+            ffmpeg_path,
+            "-hide_banner",
+            "-encoders",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=timeout)
+    except (FileNotFoundError, OSError, asyncio.TimeoutError) as exc:
+        logger.debug("could not list ffmpeg encoders: %s", exc)
+        return []
+    text = stdout.decode("utf-8", errors="replace")
+    advertised = [name for name in HW_ENCODER_PREFERENCE if name in text]
+
+    working: list[str] = []
+    for encoder in advertised:
+        if await _hw_encoder_works(ffmpeg_path, encoder):
+            working.append(encoder)
+        else:
+            logger.info("hardware encoder %s is advertised but not usable here", encoder)
+    return working
+
+
+async def _hw_encoder_works(ffmpeg_path: str, encoder: str, timeout: float = 12.0) -> bool:
+    """True if a tiny test-encode with *encoder* succeeds (device really present)."""
+    args = [
+        ffmpeg_path, "-hide_banner", "-loglevel", "error",
+        "-f", "lavfi", "-i", "color=c=black:s=128x72:r=5",
+        "-frames:v", "2", "-an", "-c:v", encoder, "-f", "null", "-",
+    ]
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        code = await asyncio.wait_for(process.wait(), timeout=timeout)
+        return code == 0
+    except (FileNotFoundError, OSError):
+        return False
+    except asyncio.TimeoutError:
+        try:
+            process.kill()
+            await process.wait()
+        except (ProcessLookupError, OSError):  # pragma: no cover
+            pass
+        return False
+
+
 def build_header_blob(headers: dict[str, str]) -> str:
     """Render headers in the CRLF-delimited form the ``-headers`` option wants."""
     return "".join(f"{key}: {value}\r\n" for key, value in headers.items() if key)
+
+
+def resolve_video_encoder(hardware: str, caps: FFmpegCapabilities | None) -> str:
+    """Pick the video encoder for transcode mode.
+
+    ``hardware`` is the ``transcode_hardware`` setting:
+      * ``off``  -> always software ``libx264``
+      * ``auto`` -> the best hardware encoder FFmpeg advertises, else libx264
+      * a name (``videotoolbox``/``nvenc``/``qsv``/``amf``) -> that encoder if
+        available, otherwise fall back to software.
+    """
+    choice = (hardware or "auto").strip().lower()
+    caps = caps or FFmpegCapabilities()
+    if choice in ("off", "software", "libx264", "cpu"):
+        return "libx264"
+    if choice == "auto":
+        return caps.best_hw_encoder() or "libx264"
+    wanted = choice if choice.startswith("h264_") else f"h264_{choice}"
+    return wanted if wanted in caps.hw_encoders else "libx264"
+
+
+def _video_encoder_args(encoder: str, video_bitrate: str, preset: str) -> list[str]:
+    """Encoder-specific output args for one H.264 encoder at a live bitrate."""
+    bufsize = _double_bitrate(video_bitrate)
+    common_rate = ["-b:v", video_bitrate, "-maxrate", video_bitrate, "-bufsize", bufsize]
+    gop = ["-g", "50", "-keyint_min", "50"]
+    if encoder == "h264_videotoolbox":
+        return [
+            "-c:v", "h264_videotoolbox", "-profile:v", "main",
+            "-pix_fmt", "yuv420p", "-realtime", "1", *common_rate, *gop,
+        ]
+    if encoder == "h264_nvenc":
+        return [
+            "-c:v", "h264_nvenc", "-preset", "p4", "-tune", "ll",
+            "-profile:v", "main", "-pix_fmt", "yuv420p", "-rc", "cbr",
+            *common_rate, *gop,
+        ]
+    if encoder == "h264_qsv":
+        return [
+            "-c:v", "h264_qsv", "-profile:v", "main",
+            "-pix_fmt", "nv12", *common_rate, *gop,
+        ]
+    if encoder == "h264_amf":
+        return [
+            "-c:v", "h264_amf", "-profile:v", "main",
+            "-usage", "lowlatency", *common_rate, *gop,
+        ]
+    if encoder == "h264_v4l2m2m":
+        return ["-c:v", "h264_v4l2m2m", "-pix_fmt", "yuv420p", *common_rate, *gop]
+    # software x264
+    return [
+        "-c:v", "libx264", "-preset", preset, "-profile:v", "main",
+        "-pix_fmt", "yuv420p", *common_rate, *gop, "-sc_threshold", "0",
+    ]
 
 
 def build_command(
@@ -116,13 +252,22 @@ def build_command(
     video_bitrate: str = "2500k",
     audio_bitrate: str = "128k",
     preset: str = "veryfast",
+    video_encoder: str = "libx264",
     extra_input_args: list[str] | None = None,
     extra_output_args: list[str] | None = None,
+    output_format: str = "flv",
+    profile: Any = None,
 ) -> list[str]:
     """Assemble the FFmpeg argument vector for one relay.
 
     ``-c copy`` is the default because it costs almost no CPU; transcoding is
     opt-in per channel for sources whose codecs RTMP/FLV cannot carry.
+
+    Passing a :class:`~app.streaming.relay.SeamlessProfile` overrides both the
+    mode and the codec settings: every source of a seamless channel must encode
+    identically, or the publisher copying its packets would break on a switch.
+    ``output_format='mpegts'`` sends the result into the local UDP relay
+    instead of straight to an RTMP endpoint.
     """
     caps = caps or FFmpegCapabilities()
     args: list[str] = [
@@ -175,18 +320,11 @@ def build_command(
     args += ["-i", stream.url]
 
     # ---- output --------------------------------------------------------
-    if mode == "transcode":
+    if profile is not None:
+        args += profile.encode_args()
+    elif mode == "transcode":
+        args += _video_encoder_args(video_encoder or "libx264", video_bitrate, preset)
         args += [
-            "-c:v", "libx264",
-            "-preset", preset,
-            "-profile:v", "main",
-            "-pix_fmt", "yuv420p",
-            "-b:v", video_bitrate,
-            "-maxrate", video_bitrate,
-            "-bufsize", _double_bitrate(video_bitrate),
-            "-g", "50",
-            "-keyint_min", "50",
-            "-sc_threshold", "0",
             "-c:a", "aac",
             "-b:a", audio_bitrate,
             "-ar", "44100",
@@ -199,17 +337,29 @@ def build_command(
             args += ["-bsf:a", "aac_adtstoasc"]
 
     args += [
-        # Normalise timestamps so the FLV muxer does not choke on the source's
+        # Normalise timestamps so the muxer does not choke on the source's
         # discontinuities ("Non-monotonous DTS") - the #1 cause of copy drops.
         "-avoid_negative_ts", "make_zero",
         "-max_muxing_queue_size", "4096",
-        "-flvflags", "no_duration_filesize",
-        "-f", "flv",
     ]
+    args += _container_args(output_format)
     if extra_output_args:
         args += list(extra_output_args)
     args.append(output_url)
     return args
+
+
+def _container_args(output_format: str) -> list[str]:
+    """Muxer flags for the container this process writes."""
+    if output_format == "mpegts":
+        return [
+            # The publisher may attach after the feeder started, so repeat the
+            # PAT/PMT tables instead of sending them once at the top.
+            "-mpegts_flags", "+resend_headers",
+            "-flush_packets", "1",
+            "-f", "mpegts",
+        ]
+    return ["-flvflags", "no_duration_filesize", "-f", "flv"]
 
 
 def build_egress_command(
@@ -243,6 +393,88 @@ def build_egress_command(
     ]
 
 
+def build_publisher_command(
+    *,
+    ffmpeg_path: str,
+    input_url: str,
+    output_url: str,
+) -> list[str]:
+    """The process that must never restart on a seamless channel.
+
+    It reads the local MPEG-TS relay and copies it to the real destination, so
+    the RTMP session survives every source switch behind it.
+
+    ``-use_wallclock_as_timestamps`` is what makes that work: each feeder starts
+    its own clock at zero, and without restamping, the second feeder's
+    timestamps would jump backwards and the muxer would reject the stream.
+    """
+    return [
+        ffmpeg_path,
+        "-hide_banner",
+        "-loglevel", "warning",
+        "-nostats",
+        "-progress", "pipe:1",
+        "-fflags", "+genpts+discardcorrupt+igndts",
+        "-use_wallclock_as_timestamps", "1",
+        "-i", input_url,
+        "-c", "copy",
+        "-avoid_negative_ts", "make_zero",
+        "-max_muxing_queue_size", "4096",
+        "-flvflags", "no_duration_filesize",
+        "-f", "flv",
+        output_url,
+    ]
+
+
+def build_watch_command(
+    *,
+    ffmpeg_path: str,
+    stream: ResolvedStream,
+    caps: FFmpegCapabilities | None = None,
+) -> list[str]:
+    """Pull a source and throw the bytes away, to prove it actually sustains.
+
+    Used as the last gate before returning to a recovered primary: an ffprobe
+    that succeeds only says the first seconds parsed, while this keeps reading
+    for as long as the caller watches it.  It copies rather than decodes, so
+    the cost is bandwidth, not CPU.
+    """
+    caps = caps or FFmpegCapabilities()
+    args: list[str] = [
+        ffmpeg_path,
+        "-hide_banner",
+        "-loglevel", "warning",
+        "-nostats",
+        "-progress", "pipe:1",
+    ]
+    if stream.is_http:
+        if caps.reconnect:
+            args += ["-reconnect", "1"]
+        if caps.reconnect_streamed:
+            args += ["-reconnect_streamed", "1"]
+        if caps.reconnect_delay_max:
+            args += ["-reconnect_delay_max", "5"]
+        if stream.user_agent:
+            args += ["-user_agent", stream.user_agent]
+        blob = build_header_blob(
+            {
+                key: value
+                for key, value in stream.request_headers().items()
+                if key.lower() != "user-agent"
+            }
+        )
+        if blob:
+            args += ["-headers", blob]
+    args += [
+        "-fflags", "+genpts+discardcorrupt+igndts",
+        "-i", stream.url,
+        "-c", "copy",
+        "-f", "mpegts",
+        os.devnull,
+    ]
+    return args
+
+
 def build_slate_command(
     *,
     ffmpeg_path: str,
@@ -252,6 +484,8 @@ def build_slate_command(
     color: str = "0x111827",
     fps: int = 15,
     video_bitrate: str = "500k",
+    profile: Any = None,
+    output_format: str = "flv",
 ) -> list[str]:
     """A tiny looping "reconnecting" feed to publish while a channel is down.
 
@@ -264,7 +498,15 @@ def build_slate_command(
     It publishes into the channel's MediaMTX path, so viewers already pulling
     that path see the slate instead of a frozen player; when the real ingest
     recovers it takes the path back over.
+
+    On a seamless channel it feeds the local relay instead, and must then use
+    the channel's :class:`~app.streaming.relay.SeamlessProfile` verbatim - the
+    publisher copies whatever arrives, so a slate encoded differently from the
+    real sources would break the stream it is supposed to be covering for.
     """
+    if profile is not None:
+        size = profile.size
+        fps = int(profile.fps)
     args: list[str] = [
         ffmpeg_path,
         "-hide_banner",
@@ -279,27 +521,29 @@ def build_slate_command(
         args += ["-loop", "1", "-framerate", str(fps), "-i", image_path]
     else:
         args += ["-f", "lavfi", "-i", f"color=c={color}:s={size}:r={fps}"]
-    # A silent stereo track keeps players and the FLV muxer happy.
+    # A silent stereo track keeps players and the muxer happy.
     args += ["-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo"]
-    args += [
-        "-c:v", "libx264",
-        "-preset", "ultrafast",
-        "-tune", "stillimage",
-        "-pix_fmt", "yuv420p",
-        "-r", str(fps),
-        "-g", str(fps * 2),
-        "-b:v", video_bitrate,
-        "-maxrate", video_bitrate,
-        "-bufsize", _double_bitrate(video_bitrate),
-        "-c:a", "aac",
-        "-b:a", "64k",
-        "-ar", "44100",
-        "-ac", "2",
-        "-max_muxing_queue_size", "1024",
-        "-flvflags", "no_duration_filesize",
-        "-f", "flv",
-        output_url,
-    ]
+    if profile is not None:
+        args += profile.encode_args()
+    else:
+        args += [
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-tune", "stillimage",
+            "-pix_fmt", "yuv420p",
+            "-r", str(fps),
+            "-g", str(fps * 2),
+            "-b:v", video_bitrate,
+            "-maxrate", video_bitrate,
+            "-bufsize", _double_bitrate(video_bitrate),
+            "-c:a", "aac",
+            "-b:a", "64k",
+            "-ar", "44100",
+            "-ac", "2",
+        ]
+    args += ["-max_muxing_queue_size", "1024"]
+    args += _container_args(output_format)
+    args.append(output_url)
     return args
 
 
@@ -657,6 +901,10 @@ class FFmpegManager:
     def set_path(self, ffmpeg_path: str) -> None:
         self.ffmpeg_path = ffmpeg_path
 
+    def encoder_for(self, hardware: str) -> str:
+        """The video encoder a 'auto'/'off'/named hardware setting resolves to."""
+        return resolve_video_encoder(hardware, self.capabilities)
+
     async def spawn(
         self,
         channel_id: int,
@@ -668,8 +916,14 @@ class FFmpegManager:
         video_bitrate: str = "2500k",
         audio_bitrate: str = "128k",
         preset: str = "veryfast",
+        hardware: str = "auto",
+        profile: Any = None,
+        output_format: str = "flv",
     ) -> FFmpegProcess:
         """Build the command and start FFmpeg for one channel."""
+        video_encoder = resolve_video_encoder(hardware, self.capabilities)
+        if profile is not None and not profile.encoder:
+            profile.encoder = video_encoder
         command = build_command(
             ffmpeg_path=self.ffmpeg_path,
             stream=stream,
@@ -680,7 +934,20 @@ class FFmpegManager:
             video_bitrate=video_bitrate,
             audio_bitrate=audio_bitrate,
             preset=preset,
+            video_encoder=video_encoder,
+            profile=profile,
+            output_format=output_format,
         )
+        if profile is not None:
+            logger.info(
+                "channel %s: seamless feeder encoding %s",
+                channel_id,
+                profile.describe(),
+            )
+        elif mode == "transcode":
+            logger.info(
+                "channel %s: transcoding with %s", channel_id, video_encoder
+            )
         logger.debug(
             "channel %s command: %s (headers: %s)",
             channel_id,
@@ -700,6 +967,8 @@ class FFmpegManager:
         size: str = "1280x720",
         color: str = "0x111827",
         video_bitrate: str = "500k",
+        profile: Any = None,
+        output_format: str = "flv",
     ) -> FFmpegProcess:
         """Start the looping "reconnecting" slate for a down channel."""
         command = build_slate_command(
@@ -709,8 +978,51 @@ class FFmpegManager:
             size=size,
             color=color,
             video_bitrate=video_bitrate,
+            profile=profile,
+            output_format=output_format,
         )
         logger.info("channel %s: starting slate -> %s", channel_id, safe_command(command))
+        process = FFmpegProcess(channel_id, command, ffmpeg_log_dir=self.ffmpeg_log_dir)
+        await process.start()
+        return process
+
+    async def spawn_publisher(
+        self,
+        channel_id: int,
+        *,
+        input_url: str,
+        output_url: str,
+    ) -> FFmpegProcess:
+        """Start the long-lived publisher of a seamless channel."""
+        command = build_publisher_command(
+            ffmpeg_path=self.ffmpeg_path,
+            input_url=input_url,
+            output_url=output_url,
+        )
+        logger.info(
+            "channel %s: starting seamless publisher -> %s",
+            channel_id,
+            safe_command(command),
+        )
+        process = FFmpegProcess(channel_id, command, ffmpeg_log_dir=self.ffmpeg_log_dir)
+        await process.start()
+        return process
+
+    async def spawn_watch(
+        self,
+        channel_id: int,
+        *,
+        stream: ResolvedStream,
+    ) -> FFmpegProcess:
+        """Start a throwaway pull used to prove a source really sustains."""
+        command = build_watch_command(
+            ffmpeg_path=self.ffmpeg_path,
+            stream=stream,
+            caps=self.capabilities,
+        )
+        logger.debug(
+            "channel %s: shadow run -> %s", channel_id, safe_command(command)
+        )
         process = FFmpegProcess(channel_id, command, ffmpeg_log_dir=self.ffmpeg_log_dir)
         await process.start()
         return process

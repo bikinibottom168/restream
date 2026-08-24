@@ -9,9 +9,13 @@ from app.streaming.ffmpeg import (
     build_command,
     build_egress_command,
     build_header_blob,
+    build_publisher_command,
     build_slate_command,
+    build_watch_command,
+    resolve_video_encoder,
     safe_command,
 )
+from app.streaming.relay import SeamlessProfile
 from app.streaming.probe import ProbeResult
 
 
@@ -183,6 +187,56 @@ def test_slate_command_loops_a_configured_image():
     assert not any(arg.startswith("color=") for arg in command)
 
 
+def test_seamless_feeder_writes_mpegts_with_the_shared_profile():
+    profile = SeamlessProfile(size="854x480", fps=30, video_bitrate="1500k")
+    command = build_command(
+        ffmpeg_path="ffmpeg",
+        stream=stream(),
+        output_url="udp://127.0.0.1:21000?pkt_size=1316",
+        mode="copy",  # overridden: a seamless feeder must always encode
+        profile=profile,
+        output_format="mpegts",
+    )
+    assert "-c" not in command or command[command.index("-c") + 1] != "copy"
+    assert command[command.index("-s") + 1] == "854x480"
+    assert command[command.index("-f") + 1] == "mpegts"
+    assert "+resend_headers" in command, "a publisher attaching late still needs the tables"
+
+
+def test_publisher_restamps_so_a_source_switch_does_not_go_backwards():
+    command = build_publisher_command(
+        ffmpeg_path="ffmpeg",
+        input_url="udp://127.0.0.1:21000",
+        output_url="rtmp://a.rtmp.youtube.com/live2/key",
+    )
+    assert command[command.index("-use_wallclock_as_timestamps") + 1] == "1"
+    assert command[command.index("-c") + 1] == "copy", "the publisher never re-encodes"
+    assert command[command.index("-f") + 1] == "flv"
+
+
+def test_seamless_slate_matches_the_feeder_profile():
+    profile = SeamlessProfile(size="854x480", fps=30, video_bitrate="1500k")
+    command = build_slate_command(
+        ffmpeg_path="ffmpeg",
+        output_url="udp://127.0.0.1:21000?pkt_size=1316",
+        profile=profile,
+        output_format="mpegts",
+    )
+    # A slate encoded differently from the real sources would break the very
+    # stream it is covering for, because the publisher only copies packets.
+    assert command[command.index("-s") + 1] == "854x480"
+    assert "-tune" not in command
+    # The input side uses -f lavfi, so the muxer is the last -f on the line.
+    assert command[len(command) - 1 - command[::-1].index("-f") + 1] == "mpegts"
+
+
+def test_watch_command_throws_the_bytes_away():
+    command = build_watch_command(ffmpeg_path="ffmpeg", stream=stream())
+    assert command[command.index("-c") + 1] == "copy", "proving it sustains costs no CPU"
+    assert "-progress" in command
+    assert command[-1] not in ("-", ""), "output must be a real null sink, not stdout"
+
+
 def test_egress_command_is_a_copy_relay():
     command = build_egress_command(
         ffmpeg_path="ffmpeg",
@@ -194,6 +248,33 @@ def test_egress_command_is_a_copy_relay():
     assert command[-1] == "rtmp://cdn.example/live/key123"
     assert command[-2] == "flv" and command[-3] == "-f"
     assert "libx264" not in command
+
+
+def test_resolve_video_encoder():
+    caps = FFmpegCapabilities(hw_encoders=["h264_videotoolbox", "h264_qsv"])
+    # auto picks the best available (videotoolbox is first in preference)
+    assert resolve_video_encoder("auto", caps) == "h264_videotoolbox"
+    # off always software
+    assert resolve_video_encoder("off", caps) == "libx264"
+    # a specific available encoder is honoured
+    assert resolve_video_encoder("qsv", caps) == "h264_qsv"
+    # a specific UNavailable encoder falls back to software
+    assert resolve_video_encoder("nvenc", caps) == "libx264"
+    # auto with no hardware -> software
+    assert resolve_video_encoder("auto", FFmpegCapabilities()) == "libx264"
+
+
+def test_transcode_uses_hardware_encoder_when_selected():
+    caps = FFmpegCapabilities(hw_encoders=["h264_nvenc"])
+    command = build_command(
+        ffmpeg_path="ffmpeg", stream=stream(), output_url="rtmp://x/y",
+        mode="transcode", caps=caps, video_encoder="h264_nvenc",
+        video_bitrate="2500k",
+    )
+    assert "h264_nvenc" in command
+    assert "libx264" not in command
+    assert command[command.index("-b:v") + 1] == "2500k"
+    assert command[command.index("-c:a") + 1] == "aac"
 
 
 def test_header_blob_format():

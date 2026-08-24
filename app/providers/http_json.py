@@ -283,6 +283,9 @@ class HttpJsonProvider(StreamProvider):
             headers=headers,
             follow_redirects=True,
         )
+        # Reuse the login session from a previous run so the app does not have to
+        # log in again on every restart (which looks suspicious to a portal).
+        self._load_cookies()
 
     async def aclose(self) -> None:
         if self._client is not None:
@@ -294,6 +297,73 @@ class HttpJsonProvider(StreamProvider):
         if self._client is None:
             raise ProviderConfigError("provider is not started; call start() first")
         return self._client
+
+    # ------------------------------------------------------------------ #
+    # cookie-jar persistence (so a restart does not force a fresh login)
+    # ------------------------------------------------------------------ #
+    def _load_cookies(self) -> None:
+        path = self._cookie_path
+        if path is None or self._client is None:
+            return
+        try:
+            from pathlib import Path
+
+            path = Path(path)
+            if not path.is_file():
+                return
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            logger.debug("provider %s: could not load cookies: %s", self.name, exc)
+            return
+        loaded = 0
+        for cookie in data if isinstance(data, list) else []:
+            try:
+                self._client.cookies.set(
+                    cookie["name"],
+                    cookie.get("value", ""),
+                    domain=cookie.get("domain", "") or "",
+                    path=cookie.get("path", "/") or "/",
+                )
+                loaded += 1
+            except (KeyError, TypeError):
+                continue
+        if loaded:
+            # Assume the restored session is still good; a stale one just bounces
+            # to the login page on the first request and triggers one re-login.
+            self._authenticated = True
+            logger.info(
+                "provider %s: restored %d cookie(s) from the last session",
+                self.name,
+                loaded,
+            )
+
+    def _save_cookies(self) -> None:
+        path = self._cookie_path
+        if path is None or self._client is None:
+            return
+        try:
+            from pathlib import Path
+
+            path = Path(path)
+            jar = [
+                {
+                    "name": c.name,
+                    "value": c.value or "",
+                    "domain": c.domain or "",
+                    "path": c.path or "/",
+                }
+                for c in self._client.cookies.jar
+            ]
+            if not jar:
+                return
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(jar), encoding="utf-8")
+            try:  # best-effort: keep session cookies private (POSIX)
+                path.chmod(0o600)
+            except OSError:  # pragma: no cover - Windows / unusual FS
+                pass
+        except (OSError, ValueError) as exc:
+            logger.debug("provider %s: could not save cookies: %s", self.name, exc)
 
     # ------------------------------------------------------------------ #
     # authentication
@@ -331,6 +401,9 @@ class HttpJsonProvider(StreamProvider):
             ok = await self._form_login()
             self._authenticated = ok
             self._auth_generation += 1
+            if ok:
+                # Persist the fresh session so the next app start reuses it.
+                self._save_cookies()
             return ok
 
     async def _form_login(self) -> bool:

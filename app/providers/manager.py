@@ -83,6 +83,16 @@ class ProviderManager:
     # ------------------------------------------------------------------ #
     # secrets
     # ------------------------------------------------------------------ #
+    def _cookie_path_for(self, provider_id: int) -> Any:
+        """Per-provider file the login cookie jar is persisted to."""
+        from pathlib import Path
+
+        try:
+            data_dir = Path(self._settings.env.data_dir)
+        except Exception:  # noqa: BLE001 - never block provider build on this
+            return None
+        return data_dir / "cookies" / f"provider_{provider_id}.json"
+
     def secrets_for(self, provider_id: int) -> dict[str, str]:
         return {
             name: self._secrets.get(secret_key(provider_id, name))
@@ -144,6 +154,7 @@ class ProviderManager:
                 config=row.config,
                 secrets=self.secrets_for(row.id),
                 client=self._client,
+                cookie_path=self._cookie_path_for(row.id),
             )
             await provider.start()
             return provider

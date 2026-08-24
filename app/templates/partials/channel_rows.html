@@ -29,6 +29,10 @@
     <td>
       <span class="badge status-{{ channel.status_badge }}">{{ channel.status }}</span>
       {% if channel.unstable %}<span class="badge text-bg-warning ms-1" title="Restarting too often">UNSTABLE</span>{% endif %}
+      {% if channel.on_fallback %}
+        <span class="badge text-bg-warning ms-1"
+              title="{{ t('Running on a backup source') }}">{{ t('BACKUP') }}</span>
+      {% endif %}
     </td>
     <td class="smaller text-secondary text-truncate" style="max-width: 240px;"
         title="{{ channel.source_url_short }}">

@@ -27,6 +27,22 @@ EDITABLE_KEYS: dict[str, tuple[type, str]] = {
     "restart_window_seconds": (int, "restart_window_seconds"),
     "restart_window_threshold": (int, "restart_window_threshold"),
     "unstable_restart_delay_seconds": (int, "unstable_restart_delay_seconds"),
+    "failover_enabled": (bool, "failover_enabled"),
+    "failover_after_seconds": (int, "failover_after_seconds"),
+    "failover_failure_threshold": (int, "failover_failure_threshold"),
+    "failover_min_stable_seconds": (int, "failover_min_stable_seconds"),
+    "auto_failback": (bool, "auto_failback"),
+    "failback_after_seconds": (int, "failback_after_seconds"),
+    "failback_probe_interval_seconds": (int, "failback_probe_interval_seconds"),
+    "failback_shadow_seconds": (int, "failback_shadow_seconds"),
+    "failback_penalty_window_seconds": (int, "failback_penalty_window_seconds"),
+    "failback_penalty_max_seconds": (int, "failback_penalty_max_seconds"),
+    "all_down_slow_after_seconds": (int, "all_down_slow_after_seconds"),
+    "all_down_retry_delay_seconds": (int, "all_down_retry_delay_seconds"),
+    "slate_keep_for_rtmp": (bool, "slate_keep_for_rtmp"),
+    "seamless_video_size": (str, "seamless_video_size"),
+    "seamless_fps": (int, "seamless_fps"),
+    "relay_port_base": (int, "relay_port_base"),
     "ffmpeg_path": (str, "ffmpeg_path"),
     "ffprobe_path": (str, "ffprobe_path"),
     "default_rtmp_server": (str, "default_rtmp_server"),
@@ -34,6 +50,7 @@ EDITABLE_KEYS: dict[str, tuple[type, str]] = {
     "transcode_video_bitrate": (str, "transcode_video_bitrate"),
     "transcode_audio_bitrate": (str, "transcode_audio_bitrate"),
     "transcode_preset": (str, "transcode_preset"),
+    "transcode_hardware": (str, "transcode_hardware"),
     "buffer_enabled": (bool, "buffer_enabled"),
     "buffer_seconds": (int, "buffer_seconds"),
     "buffer_slate_enabled": (bool, "buffer_slate_enabled"),
@@ -63,6 +80,18 @@ NUMERIC_BOUNDS: dict[str, tuple[int, int]] = {
     "restart_window_threshold": (2, 100),
     "unstable_restart_delay_seconds": (10, 3_600),
     "source_cache_ttl_seconds": (0, 86_400),
+    "failover_after_seconds": (30, 86_400),
+    "failover_failure_threshold": (1, 20),
+    "failover_min_stable_seconds": (10, 3_600),
+    "failback_after_seconds": (60, 86_400),
+    "failback_probe_interval_seconds": (15, 3_600),
+    "failback_shadow_seconds": (0, 3_600),
+    "failback_penalty_window_seconds": (0, 86_400),
+    "failback_penalty_max_seconds": (60, 86_400),
+    "all_down_slow_after_seconds": (0, 86_400),
+    "all_down_retry_delay_seconds": (10, 3_600),
+    "seamless_fps": (5, 60),
+    "relay_port_base": (1_024, 65_000),
     "buffer_seconds": (0, 300),
     "slate_max_seconds": (0, 86_400),
     "mediamtx_rtmp_port": (1, 65_535),
@@ -94,6 +123,21 @@ def _coerce(key: str, value: Any, expected: type) -> Any:
         raise SettingsValidationError("default_rtmp_server must start with rtmp:// or rtmps://")
     if key == "default_stream_mode" and text not in {"copy", "transcode"}:
         raise SettingsValidationError("default_stream_mode must be 'copy' or 'transcode'")
+    if key == "transcode_hardware":
+        allowed = {
+            "auto", "off", "software", "libx264", "cpu",
+            "videotoolbox", "nvenc", "qsv", "amf", "v4l2m2m",
+        }
+        if text.lower() not in allowed and not text.lower().startswith("h264_"):
+            raise SettingsValidationError(
+                "transcode_hardware must be auto/off or a known encoder name"
+            )
+        text = text.lower()
+    if key == "seamless_video_size":
+        width, _, height = text.lower().partition("x")
+        if not (width.isdigit() and height.isdigit()):
+            raise SettingsValidationError("seamless_video_size must look like 1280x720")
+        text = text.lower()
     if key == "ui_language" and text.lower() not in {"th", "en"}:
         raise SettingsValidationError("ui_language must be 'th' or 'en'")
     return text

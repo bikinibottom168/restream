@@ -299,6 +299,76 @@ class StreamResolver:
         )
 
     # ------------------------------------------------------------------ #
+    async def resolve_direct(
+        self,
+        channel: Any,
+        source: Any,
+        *,
+        validate: bool = True,
+    ) -> ResolutionOutcome:
+        """Vet a backup URL the operator typed, bypassing the provider.
+
+        A fallback is a plain media URL: there is nothing to log in to and no
+        token to renew, so the provider is skipped entirely and only the parts
+        that protect the relay are kept - the DRM refusal and the ffprobe.
+
+        The result is deliberately *not* written to ``channel.source_url``:
+        that column caches the primary's resolution, and overwriting it with a
+        backup URL would hide the primary's real state and poison its cache.
+        """
+        url = (getattr(source, "url", "") or "").strip()
+        if not url:
+            return ResolutionOutcome(ok=False, error="backup source has no URL")
+
+        stream = ResolvedStream(
+            channel_id=channel.provider_ref or str(channel.id),
+            url=url,
+            provider="fallback",
+            note=getattr(source, "name", "fallback"),
+        )
+        stream = self._apply_channel_overrides(stream, channel)
+        # Per-URL hints win over the channel-wide ones: a backup usually lives
+        # on a different host and often needs a different Referer.
+        headers = dict(stream.headers)
+        headers.update(normalise_headers(getattr(source, "headers", {}) or {}))
+        stream.headers = headers
+        if getattr(source, "referer", ""):
+            stream.referer = source.referer
+        if getattr(source, "user_agent", ""):
+            stream.user_agent = source.user_agent
+
+        try:
+            await self._check_manifest(stream)
+        except ProviderUnsupportedMedia as exc:
+            return ResolutionOutcome(
+                ok=False, stream=stream, error=str(exc), unsupported=True
+            )
+        except ProviderAuthError as exc:
+            return ResolutionOutcome(ok=False, stream=stream, error=str(exc))
+
+        probe: ProbeResult | None = None
+        if validate:
+            probe = await probe_stream(
+                stream.url,
+                ffprobe_path=self._settings.get_str("ffprobe_path"),
+                timeout=float(self._settings.get_int("probe_timeout_seconds")),
+                headers=stream.request_headers() or None,
+                user_agent=stream.user_agent,
+            )
+            if not probe.ok:
+                return ResolutionOutcome(
+                    ok=False, stream=stream, probe=probe, error=probe.error
+                )
+
+        logger.info(
+            "channel %s using backup source %s -> %s",
+            channel.id,
+            getattr(source, "name", "fallback"),
+            mask_url_token(stream.url),
+        )
+        return ResolutionOutcome(ok=True, stream=stream, probe=probe)
+
+    # ------------------------------------------------------------------ #
     async def refresh(self, channel: Any, *, validate: bool = True) -> ResolutionOutcome:
         """Force a new URL for exactly this channel (nothing else is touched)."""
         return await self.resolve(channel, force=True, validate=validate)

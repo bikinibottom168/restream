@@ -8,13 +8,14 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from app.core.i18n import translate_provider_types
+from app.core.i18n import explain_stream_error, translate_provider_types
 from app.core.logging import tail_file
 from app.core.state import FILTER_GROUPS, parse_state
 from app.database import crud
 from app.database.db import run_db
 from app.providers.factory import ProviderFactory
 from app.providers.manager import PROVIDER_SECRET_KEYS
+from app.streaming.failover import fallback_urls_text
 from app.streaming.mediamtx import download_asset as mediamtx_download_hint
 from app.web.api import channel_list
 
@@ -78,6 +79,12 @@ async def page_dashboard(
     if not providers and not channels:
         return RedirectResponse(url="/setup", status_code=302)
     filtered = _filter_channels(channels, status, q)
+    # Channels with outages in the last 24h, most-troublesome first.
+    unstable = sorted(
+        (c for c in channels if c.get("outages_24h", 0) > 0),
+        key=lambda c: (c["outages_24h"], -c.get("uptime_24h", 100)),
+        reverse=True,
+    )[:6]
     return templates.TemplateResponse(
         request,
         "dashboard.html",
@@ -90,6 +97,7 @@ async def page_dashboard(
             status_filter=status,
             search=q,
             providers=providers,
+            unstable=unstable,
             page="dashboard",
         ),
     )
@@ -111,6 +119,7 @@ async def page_channel(
         default_rtmp=ctx.store.get_str("default_rtmp_server"),
         provider_name=provider.name if provider else "",
     )
+    payload["last_error_explained"] = explain_stream_error(payload.get("last_error") or "")
     events = await run_db(crud.list_events, channel_id=channel_id, limit=30)
     history = await run_db(crud.list_downtime, channel_id=channel_id, limit=20)
     log_lines = tail_file(ctx.settings.ffmpeg_log_dir / f"{channel_id}.log", 120)
@@ -129,6 +138,8 @@ async def page_channel(
             history=[serialize_downtime(record) for record in history],
             log_lines=log_lines,
             providers=providers,
+            raw_fallbacks=fallback_urls_text(channel.fallback_urls),
+            values=ctx.store.as_dict(),
             page="channels",
         ),
     )

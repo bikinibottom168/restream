@@ -204,10 +204,53 @@ class TelegramNotifier:
         )
         return await self.send(text)
 
+    async def channel_failover(
+        self,
+        channel_id: int,
+        channel_name: str,
+        source_name: str,
+        detail: str,
+        *,
+        back_to_primary: bool = False,
+    ) -> bool:
+        """Announce a source switch - the one thing an operator must not miss."""
+        if back_to_primary:
+            text = (
+                "🔵 <b>BACK ON PRIMARY</b>\n"
+                f"Channel: {html.escape(channel_name or str(channel_id))}\n"
+                f"Time: {format_local(utcnow())}\n"
+                f"{html.escape(detail[:200])}"
+            )
+        else:
+            text = (
+                "🟡 <b>SWITCHED TO BACKUP</b>\n"
+                f"Channel: {html.escape(channel_name or str(channel_id))}\n"
+                f"Now using: {html.escape(source_name[:60])}\n"
+                f"Time: {format_local(utcnow())}\n"
+                f"Reason: {html.escape(detail[:200])}"
+            )
+        return await self.send(text)
+
+    async def channel_all_sources_down(
+        self, channel_id: int, channel_name: str, detail: str
+    ) -> bool:
+        """Sent once per outage when no source of a channel works at all."""
+        if not self._should_alert(f"all-down:{channel_id}"):
+            return False
+        text = (
+            "⛔ <b>ALL SOURCES DOWN</b>\n"
+            f"Channel: {html.escape(channel_name or str(channel_id))}\n"
+            f"Time: {format_local(utcnow())}\n"
+            f"{html.escape(detail[:200])}\n\n"
+            "Retrying every source in turn. Check the origin and the backup URLs."
+        )
+        return await self.send(text)
+
     def forget_channel(self, channel_id: int) -> None:
         """Drop the remembered state (channel deleted or manually stopped)."""
         self._channel_state.pop(channel_id, None)
         self._last_alert.pop(f"unstable:{channel_id}", None)
+        self._last_alert.pop(f"all-down:{channel_id}", None)
 
     def mark_online(self, channel_id: int) -> None:
         """Seed the state without sending anything (used at startup)."""

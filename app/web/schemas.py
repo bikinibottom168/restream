@@ -7,6 +7,7 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.security import mask_url_token, shorten_url
+from app.streaming.failover import fallback_urls_text, parse_fallback_sources
 from app.core.state import ChannelState, parse_state
 from app.core.timeutil import ensure_utc, humanize_duration, isoformat, seconds_since
 
@@ -34,6 +35,36 @@ class ChannelPayload(BaseModel):
     playback_referer: str = ""
     playback_user_agent: str = ""
     playback_headers_json: str = ""
+    #: Standby media URLs, one per line or as a JSON array.
+    fallback_urls: str = ""
+    failover_after_seconds: int = 0
+    failback_after_seconds: int = 0
+    auto_failback: str = "inherit"
+    seamless_switch: bool = False
+
+    @field_validator("fallback_urls")
+    @classmethod
+    def _fallbacks(cls, v: str) -> str:
+        from app.streaming.failover import normalise_fallback_input
+
+        return normalise_fallback_input(v)
+
+    @field_validator("auto_failback")
+    @classmethod
+    def _auto_failback(cls, v: str) -> str:
+        value = (v or "inherit").strip().lower()
+        if value not in ("inherit", "on", "off"):
+            raise ValueError("auto_failback must be 'inherit', 'on' or 'off'")
+        return value
+
+    @field_validator("failover_after_seconds", "failback_after_seconds")
+    @classmethod
+    def _override_seconds(cls, v: int) -> int:
+        # 0 means "use the global setting"; anything else is a real timing and
+        # must be long enough to survive one retry cycle.
+        if v and not 30 <= v <= 86_400:
+            raise ValueError("override must be 0 (inherit) or between 30 and 86400")
+        return v
 
     @field_validator("stream_mode")
     @classmethod
@@ -202,6 +233,9 @@ def serialize_channel(
 ) -> dict[str, Any]:
     """Combine a database row with live supervisor data for the UI."""
     snapshot = snapshot or {}
+    active_index = snapshot.get(
+        "active_source_index", getattr(channel, "active_source_index", 0) or 0
+    )
     state = parse_state(snapshot.get("state") or channel.status)
     ffmpeg = snapshot.get("ffmpeg") or {}
     metrics = ffmpeg.get("metrics") or {}
@@ -217,6 +251,19 @@ def serialize_channel(
         "provider_ref": channel.provider_ref,
         "input_url": channel.input_url,
         "resolve_url": getattr(channel, "resolve_url", "") or "",
+        "fallback_urls": fallback_urls_text(getattr(channel, "fallback_urls", "")),
+        "fallback_count": len(parse_fallback_sources(getattr(channel, "fallback_urls", ""))),
+        "active_source_index": active_index,
+        "active_source": snapshot.get("active_source")
+        or ("primary" if not active_index else f"fallback {active_index}"),
+        "on_fallback": snapshot.get("on_fallback", bool(active_index)),
+        "seamless_switch": bool(getattr(channel, "seamless_switch", False)),
+        "auto_failback": getattr(channel, "auto_failback", "inherit") or "inherit",
+        "failover_after_seconds": getattr(channel, "failover_after_seconds", 0) or 0,
+        "failback_after_seconds": getattr(channel, "failback_after_seconds", 0) or 0,
+        "failback_eta_seconds": snapshot.get("failback_eta_seconds"),
+        "primary_healthy_seconds": snapshot.get("primary_healthy_seconds", 0),
+        "failback_shadow_running": snapshot.get("failback_shadow_running", False),
         "enabled": channel.enabled,
         "auto_start": channel.auto_start,
         "source_present": channel.source_present,

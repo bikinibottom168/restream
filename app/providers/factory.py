@@ -68,6 +68,7 @@ class ProviderFactory:
         config: dict[str, Any] | None = None,
         secrets: dict[str, str] | None = None,
         client: httpx.AsyncClient | None = None,
+        cookie_path: Any = None,
     ) -> StreamProvider:
         """Instantiate a provider of *type_name*."""
         provider_cls = cls.get_class(type_name)
@@ -76,6 +77,7 @@ class ProviderFactory:
             "name": name,
             "config": config or {},
             "secrets": secrets or {},
+            "cookie_path": cookie_path,
         }
         # Providers that share the application-wide HTTP client declare a
         # 'client' parameter; providers that own their session do not.
