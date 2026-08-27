@@ -214,10 +214,14 @@ THAI: dict[str, str] = {
     "Test login": "ทดสอบล็อกอิน",
     "Anti-drop buffer": "บัฟเฟอร์กันหลุด",
     # ---- backup sources / failover ------------------------------------
+    "Detect when the application freezes": "ตรวจจับเมื่อโปรแกรมค้าง",
+    "Call it frozen after (s)": "ถือว่าค้างเมื่อเกิน (วินาที)",
+    "Restart the application automatically when it freezes":
+        "รีสตาร์ทโปรแกรมอัตโนมัติเมื่อค้าง",
     "Backup sources (failover)": "ช่องสำรอง (สลับอัตโนมัติ)",
     "Backup source URLs": "URL ช่องสำรอง",
-    "One media URL per line, tried in order when the primary stays broken.":
-        "ใส่ URL สื่อบรรทัดละหนึ่งอัน จะไล่ใช้ตามลำดับเมื่อช่องหลักใช้ไม่ได้",
+    "One per line, tried in order when the primary stays broken. Each can be a direct media URL or a page that answers with one.":
+        "บรรทัดละหนึ่งอัน ไล่ใช้ตามลำดับเมื่อช่องหลักใช้ไม่ได้ ใส่ได้ทั้งลิงก์สื่อตรงๆ และลิงก์หน้าเว็บที่ตอบ URL สื่อกลับมา",
     "Switch to a backup URL when the primary source stays broken":
         "สลับไปใช้ URL สำรองเมื่อช่องหลักล่มค้าง",
     "Switch to backup after (s)": "สลับไปช่องสำรองหลัง (วินาที)",

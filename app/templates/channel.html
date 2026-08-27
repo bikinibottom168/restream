@@ -208,10 +208,16 @@
             <div class="col-12">
               <hr class="my-1">
               <label class="form-label">{{ t('Backup source URLs') }}</label>
-              <textarea class="form-control font-monospace" rows="3" name="fallback_urls"
-                        placeholder="http://backup.example.com/memfs/abc.m3u8">{{ raw_fallbacks }}</textarea>
+              <textarea class="form-control font-monospace" rows="4" name="fallback_urls"
+                        placeholder="http://backup.example.com/memfs/abc.m3u8&#10;https://site.example.com/play/ep?id=1805657">{{ raw_fallbacks }}</textarea>
               <div class="form-text">
-                {{ t('One media URL per line, tried in order when the primary stays broken.') }}
+                {{ t('One per line, tried in order when the primary stays broken. Each can be a direct media URL or a page that answers with one.') }}
+                <br>
+                🇹🇭 ใส่ได้ทั้งสองแบบ ระบบดูจาก URL เองว่าเป็นแบบไหน:
+                <br>· <code>http://1.2.3.4:8080/memfs/abc.m3u8</code> — ลิงก์สื่อตรงๆ ส่งให้ FFmpeg เลย
+                <br>· <code>https://godtv.vip/play/ep?id=1805657</code> — ลิงก์หน้าเว็บ จะดึงหา URL จริงให้ก่อน
+                (ใช้ล็อกอิน/คุกกี้เดียวกับช่องหลัก และขอใหม่ทุกครั้งที่ลองต่อ จึงรองรับลิงก์ที่หมดอายุเร็ว)
+                <br>· ถ้าเดาผิด บังคับได้ด้วยการนำหน้าว่า <code>media:</code> หรือ <code>endpoint:</code>
               </div>
             </div>
             <div class="col-md-4">

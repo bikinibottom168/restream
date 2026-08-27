@@ -9,6 +9,7 @@ from app.streaming.failover import (
     build_sources,
     fallback_urls_text,
     is_output_failure,
+    looks_like_media_url,
     normalise_fallback_input,
     parse_fallback_sources,
     slow_retry_delay,
@@ -51,6 +52,38 @@ def test_plain_text_one_url_per_line():
         "https://backup.example.com/b.m3u8",
     ]
     assert [s.index for s in sources] == [1, 2], "the primary keeps index 0"
+
+
+def test_a_backup_can_be_a_player_page_rather_than_a_manifest():
+    sources = parse_fallback_sources(
+        "http://43.249.32.198:8080/memfs/d71f.m3u8\nhttps://godtv.vip/play/ep?id=1805657"
+    )
+    assert sources[0].is_endpoint is False, "a .m3u8 goes straight to FFmpeg"
+    assert sources[1].is_endpoint is True, "a player page has to be asked first"
+
+
+def test_media_detection_reads_the_path_not_the_query():
+    # A signed manifest keeps .m3u8 in the path however long its query is...
+    assert looks_like_media_url("https://x.example/live.m3u8?token=abc&t=1")
+    # ...and a player page is exactly a path with an id in the query.
+    assert not looks_like_media_url("https://godtv.vip/play?id=7424")
+    assert looks_like_media_url("rtmp://origin.example/live/key")
+    assert not looks_like_media_url("")
+
+
+def test_the_operator_can_override_a_wrong_guess():
+    forced = parse_fallback_sources(
+        "endpoint:https://site.example/odd.m3u8\nmedia:https://cdn.example/live"
+    )
+    assert forced[0].is_endpoint is True
+    assert forced[1].is_endpoint is False
+    # https:// must never be mistaken for a kind prefix.
+    assert parse_fallback_sources("https://a.example/x.m3u8")[0].kind == "auto"
+
+
+def test_an_overridden_kind_survives_a_round_trip():
+    typed = "endpoint:https://site.example/odd.m3u8"
+    assert fallback_urls_text(normalise_fallback_input(typed)) == typed
 
 
 def test_json_objects_carry_per_url_playback_hints():

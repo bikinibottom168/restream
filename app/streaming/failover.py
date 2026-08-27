@@ -36,6 +36,37 @@ MAX_FALLBACK_SOURCES = 8
 #: Schemes FFmpeg can actually take as an input URL.
 _ALLOWED_SCHEMES = ("http://", "https://", "rtmp://", "rtmps://", "rtsp://", "srt://", "udp://")
 
+#: How a backup URL is used.
+#:
+#: ``media``    - hand it to FFmpeg as-is (a direct .m3u8, .ts, rtmp://, ...)
+#: ``endpoint`` - fetch it first and pull the media URL out of the answer, the
+#:                way the channel's own "Source endpoint URL" works, so a
+#:                backup can be a player page like ``/play/ep?id=1805657``
+#: ``auto``     - decide from the URL itself (the default)
+SOURCE_KINDS = ("auto", "media", "endpoint")
+
+#: File extensions that mean "this already is the stream".
+_MEDIA_SUFFIXES = (".m3u8", ".mpd", ".ts", ".mp4", ".mkv", ".flv", ".m4s", ".webm")
+
+#: Schemes that are always a stream - there is no page to fetch.
+_MEDIA_SCHEMES = ("rtmp://", "rtmps://", "rtsp://", "srt://", "udp://", "rtp://")
+
+
+def looks_like_media_url(url: str) -> bool:
+    """Is this already a stream, or a page that has to be asked first?
+
+    Only the path is examined: a query string is exactly what a player page
+    carries (``/play/ep?id=1805657``), and a signed manifest keeps its
+    ``.m3u8`` in the path however long the query is.
+    """
+    text = (url or "").strip().lower()
+    if not text:
+        return False
+    if text.startswith(_MEDIA_SCHEMES):
+        return True
+    path = text.split("#", 1)[0].split("?", 1)[0]
+    return path.endswith(_MEDIA_SUFFIXES)
+
 
 @dataclass(slots=True)
 class SourceCandidate:
@@ -53,10 +84,21 @@ class SourceCandidate:
     referer: str = ""
     user_agent: str = ""
     headers: dict[str, str] = field(default_factory=dict)
+    #: One of :data:`SOURCE_KINDS`. ``auto`` reads the URL to decide.
+    kind: str = "auto"
 
     @property
     def is_primary(self) -> bool:
         return self.index == 0
+
+    @property
+    def is_endpoint(self) -> bool:
+        """True when this URL has to be fetched before FFmpeg can use it."""
+        if self.kind == "endpoint":
+            return True
+        if self.kind == "media":
+            return False
+        return not looks_like_media_url(self.url)
 
     @property
     def name(self) -> str:
@@ -68,6 +110,8 @@ class SourceCandidate:
 
     def as_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {"url": self.url}
+        if self.kind != "auto":
+            data["kind"] = self.kind
         if self.label:
             data["label"] = self.label
         if self.referer:
@@ -88,13 +132,28 @@ def _clean_url(value: Any) -> str:
     return text
 
 
+def _split_kind(text: str) -> tuple[str, str]:
+    """Pull an optional ``media:``/``endpoint:`` prefix off a typed line.
+
+    Auto-detection covers the normal cases, so the prefix exists only as an
+    escape hatch - a player page whose path happens to end in ``.m3u8``, or a
+    stream served from a URL with no extension at all.
+    """
+    for kind in ("media", "endpoint"):
+        prefix = f"{kind}:"
+        if text.lower().startswith(prefix) and not text.lower().startswith(f"{prefix}//"):
+            return kind, text[len(prefix):].strip()
+    return "auto", text
+
+
 def parse_fallback_sources(raw: Any) -> list[SourceCandidate]:
     """Read the stored fallback list in any of the shapes it can arrive in.
 
     Accepts a JSON array of strings, a JSON array of objects, or plain text
     with one URL per line - which is what the textarea on the channel form
-    posts.  Anything unparseable yields an empty list rather than an error: a
-    typo in a backup URL must never stop a channel from starting.
+    posts.  A line may carry a ``media:`` or ``endpoint:`` prefix to override
+    what the URL looks like.  Anything unparseable yields an empty list rather
+    than an error: a typo in a backup URL must never stop a channel starting.
     """
     if not raw:
         return []
@@ -120,6 +179,9 @@ def parse_fallback_sources(raw: Any) -> list[SourceCandidate]:
     seen: set[str] = set()
     for entry in entries:
         if isinstance(entry, dict):
+            kind = str(entry.get("kind") or "auto").strip().lower()
+            if kind not in SOURCE_KINDS:
+                kind = "auto"
             url = _clean_url(entry.get("url"))
             label = str(entry.get("label") or "").strip()[:64]
             referer = str(entry.get("referer") or "").strip()
@@ -131,7 +193,8 @@ def parse_fallback_sources(raw: Any) -> list[SourceCandidate]:
                 else {}
             )
         else:
-            url = _clean_url(entry)
+            kind, text_entry = _split_kind(str(entry or "").strip())
+            url = _clean_url(text_entry)
             label = referer = user_agent = ""
             headers = {}
         if not url or url in seen:
@@ -145,6 +208,7 @@ def parse_fallback_sources(raw: Any) -> list[SourceCandidate]:
                 referer=referer,
                 user_agent=user_agent,
                 headers=headers,
+                kind=kind,
             )
         )
         if len(sources) >= MAX_FALLBACK_SOURCES:
@@ -165,8 +229,15 @@ def normalise_fallback_input(raw: Any) -> str:
 
 
 def fallback_urls_text(raw: Any) -> str:
-    """Render the stored value back for the textarea (one URL per line)."""
-    return "\n".join(source.url for source in parse_fallback_sources(raw))
+    """Render the stored value back for the textarea (one URL per line).
+
+    An explicitly chosen kind is written back as its prefix, so what the
+    operator typed is what they see when they reopen the form.
+    """
+    return "\n".join(
+        source.url if source.kind == "auto" else f"{source.kind}:{source.url}"
+        for source in parse_fallback_sources(raw)
+    )
 
 
 def build_sources(channel: Any) -> list[SourceCandidate]:

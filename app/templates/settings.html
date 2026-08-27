@@ -81,6 +81,43 @@
                      value="{{ values.unstable_restart_delay_seconds }}" min="10" max="3600">
               <div class="form-text">🇹🇭 ตอนถูกหน่วง (ไม่เสถียร) จะรอกี่วินาทีก่อนลองใหม่</div>
             </div>
+            <div class="col-12"><hr class="my-1"></div>
+            <div class="col-12">
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" name="stall_detection_enabled"
+                       id="stall-detection" {% if values.stall_detection_enabled %}checked{% endif %}>
+                <label class="form-check-label" for="stall-detection">
+                  {{ t('Detect when the application freezes') }}
+                </label>
+              </div>
+              <div class="form-text">
+                🇹🇭 ตรวจจับอาการ "โปรแกรมค้าง" — หน้าเว็บไม่ตอบ ช่องไม่ถูกกู้ ช่องใหม่ไม่ถูกดึง
+                ทั้งที่โปรแกรมยังเปิดอยู่ เมื่อเจอจะเขียนไฟล์ <code>logs/stall-*.txt</code>
+                ที่บอกว่าค้างอยู่บรรทัดไหน
+              </div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">{{ t('Call it frozen after (s)') }}</label>
+              <input class="form-control" type="number" name="stall_seconds"
+                     value="{{ values.stall_seconds }}" min="20" max="3600">
+              <div class="form-text">🇹🇭 ไม่มีสัญญาณชีพนานเกินนี้ถือว่าค้าง</div>
+            </div>
+            <div class="col-md-6 d-flex align-items-end">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="stall_auto_restart"
+                       id="stall-restart" {% if values.stall_auto_restart %}checked{% endif %}>
+                <label class="form-check-label" for="stall-restart">
+                  {{ t('Restart the application automatically when it freezes') }}
+                </label>
+              </div>
+            </div>
+            <div class="col-12">
+              <div class="form-text mt-0">
+                🇹🇭 <strong>ปิดไว้เป็นค่าเริ่มต้น</strong> เพราะการรีสตาร์ททำให้ทุกช่องหลุดพร้อมกัน
+                — แต่ถ้าตอนนี้คุณต้องปิดหน้าต่าง cmd แล้วเปิดใหม่เองทุกวันอยู่แล้ว การเปิดไว้ดีกว่า
+                เพราะโปรแกรมจะกู้ตัวเองภายใน {{ values.stall_seconds }} วินาที แทนที่จะค้างจนกว่าคุณจะมาเห็น
+              </div>
+            </div>
           </div>
         </div>
       </div>

@@ -84,6 +84,8 @@ class StreamResolver:
         self._providers = providers
         self._settings = settings
         self._locks: dict[int, asyncio.Lock] = {}
+        #: Built on demand for backup endpoints on channels with no provider.
+        self._endpoint_provider: StreamProvider | None = None
 
     # ------------------------------------------------------------------ #
     def _lock_for(self, channel_id: int) -> asyncio.Lock:
@@ -342,12 +344,29 @@ class StreamResolver:
         if not url:
             return ResolutionOutcome(ok=False, error="backup source has no URL")
 
-        stream = ResolvedStream(
-            channel_id=channel.provider_ref or str(channel.id),
-            url=url,
-            provider="fallback",
-            note=getattr(source, "name", "fallback"),
-        )
+        if getattr(source, "is_endpoint", False):
+            try:
+                stream = await self._resolve_backup_endpoint(channel, source)
+            except ProviderUnsupportedMedia as exc:
+                return ResolutionOutcome(ok=False, error=str(exc), unsupported=True)
+            except ProviderAuthError as exc:
+                return ResolutionOutcome(ok=False, error=str(exc), auth_error=True)
+            except (ProviderUnavailable, ProviderConfigError, ProviderError) as exc:
+                return ResolutionOutcome(ok=False, error=str(exc))
+            except Exception as exc:  # noqa: BLE001 - a provider bug must not kill the loop
+                logger.exception(
+                    "provider raised resolving backup endpoint for channel %s", channel.id
+                )
+                return ResolutionOutcome(
+                    ok=False, error=f"unexpected provider error: {exc}"
+                )
+        else:
+            stream = ResolvedStream(
+                channel_id=channel.provider_ref or str(channel.id),
+                url=url,
+                provider="fallback",
+                note=getattr(source, "name", "fallback"),
+            )
         stream = self._apply_channel_overrides(stream, channel)
         # Per-URL hints win over the channel-wide ones: a backup usually lives
         # on a different host and often needs a different Referer.
@@ -389,6 +408,45 @@ class StreamResolver:
             mask_url_token(stream.url),
         )
         return ResolutionOutcome(ok=True, stream=stream, probe=probe)
+
+    async def _resolve_backup_endpoint(self, channel: Any, source: Any) -> ResolvedStream:
+        """Ask a backup *page* for its media URL.
+
+        A backup does not have to be a manifest: it can be a player page like
+        ``/play/ep?id=1805657``, exactly like the channel's own endpoint URL.
+        Resolving it through the channel's own provider is what makes that
+        useful - the backup page usually sits behind the same login, so it gets
+        the same session, cookies and response parsing the primary does, and a
+        short-lived URL behind it is renewed on every retry.
+        """
+        provider: StreamProvider = self._providers.for_channel(channel)
+        if getattr(provider, "type_name", "") == "manual":
+            # The manual provider serves the channel's stored media URL and
+            # would quietly hand back the *primary* here. A plain fetch is the
+            # honest answer when no real provider is configured.
+            provider = await self._plain_endpoint_provider()
+
+        info = self.channel_info(channel)
+        info.metadata["resolve_url"] = source.url
+        stream = await provider.resolve_stream(info)
+        if stream is None or not stream.url:
+            raise ProviderUnavailable(
+                f"{getattr(source, 'name', 'backup')} returned no media URL"
+            )
+        stream.note = f"{getattr(source, 'name', 'backup')} via {mask_url_token(source.url)}"
+        return stream
+
+    async def _plain_endpoint_provider(self) -> StreamProvider:
+        """A no-configuration fetch-and-extract provider, built once on demand."""
+        if self._endpoint_provider is None:
+            from app.providers.url_endpoint import UrlEndpointProvider
+
+            provider = UrlEndpointProvider(
+                name="backup endpoint", config={}, client=self._providers.client
+            )
+            await provider.start()
+            self._endpoint_provider = provider
+        return self._endpoint_provider
 
     # ------------------------------------------------------------------ #
     async def refresh(self, channel: Any, *, validate: bool = True) -> ResolutionOutcome:

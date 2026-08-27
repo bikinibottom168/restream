@@ -11,6 +11,7 @@ import logging
 from typing import Any
 
 from app.core.config import Settings, get_settings
+from app.core.heartbeat import StallDetector, restart_process
 from app.core.logging import setup_logging
 from app.core.secrets import (
     ADMIN_PASSWORD_HASH,
@@ -44,6 +45,7 @@ class AppContext:
 
         self.store = SettingsStore(self.settings)
         self.secrets = SecretStore(self.settings.data_dir / "secrets.json")
+        self.stall_detector: StallDetector | None = None
         self.providers = ProviderManager(self.store, self.secrets)
         self.resolver = StreamResolver(self.providers, self.store)
         self.notifier = TelegramNotifier(self.store, self.secrets)
@@ -114,15 +116,53 @@ class AppContext:
         if not self.streams.ffprobe_info.available:
             self.startup_errors.append(self.streams.ffprobe_info.error or "ffprobe missing")
 
+        # 7. stall detection - last, so it only watches a fully started app
+        self._start_stall_detector()
+
         logger.info(
             "dashboard ready on http://%s:%s",
             self.settings.app_host,
             self.settings.app_port,
         )
 
+    def _start_stall_detector(self) -> None:
+        """Arm the watcher that notices the event loop has stopped turning."""
+        if not self.store.get_bool("stall_detection_enabled"):
+            return
+
+        def on_stall(behind: float, dump: Any) -> None:
+            # Runs on the detector thread: keep it to logging and, if the
+            # operator asked for it, the restart.
+            if self.store.get_bool("stall_auto_restart"):
+                restart_process()
+            else:
+                logger.error(
+                    "auto-restart is off, so the application will stay stalled. "
+                    "Turn on 'restart automatically' in Settings to have it "
+                    "recover on its own, and send %s to have the cause fixed.",
+                    dump or "logs/stall-*.txt",
+                )
+
+        try:
+            self.stall_detector = StallDetector(
+                log_dir=self.settings.log_dir,
+                stall_seconds=self.store.get_int("stall_seconds"),
+                on_stall=on_stall,
+            )
+            self.stall_detector.start()
+        except Exception:  # noqa: BLE001 - never block startup over a watchdog
+            logger.exception("could not start the stall detector")
+            self.stall_detector = None
+
     async def shutdown(self) -> None:
         """Ordered teardown: streams, providers, notifier, database."""
         logger.info("shutting down")
+        if self.stall_detector is not None:
+            try:
+                await self.stall_detector.stop()
+            except Exception:  # noqa: BLE001
+                logger.exception("error stopping the stall detector")
+            self.stall_detector = None
         try:
             await self.streams.shutdown()
         except Exception:  # noqa: BLE001

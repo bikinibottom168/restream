@@ -33,6 +33,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import get_settings
+from app.core.console import disable_quick_edit
 from app.version import APP_TITLE, APP_VERSION
 from app.web import api, routes, websocket
 from app.web.context import AppContext
@@ -106,6 +107,9 @@ def main() -> None:
     import uvicorn
 
     _configure_event_loop()
+    # Before anything writes to the console: a stray click in a Windows console
+    # window pauses stdout, and a paused stdout freezes the event loop with it.
+    disable_quick_edit()
     settings = get_settings()
     settings.ensure_dirs()
 

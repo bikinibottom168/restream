@@ -416,6 +416,31 @@ FFmpeg is never touched.
 `Ctrl+C` stops the watchdog, ends every FFmpeg child, closes the HTTP clients
 and the database, and leaves no zombie processes, on both Windows and macOS.
 
+### When the application itself freezes
+
+Everything above runs on one event loop. If something blocks that loop nothing
+fails and nothing is logged — the process keeps its window and its port and
+silently stops working: the dashboard hangs, channels are never recovered, and
+newly added channels are never started. The only visible cure is closing the
+window and starting again.
+
+Three defences, all on by default:
+
+- **Logging never blocks the loop.** The console and file handlers run on their
+  own thread behind a queue. This matters most on Windows, where a console in
+  selection mode stops accepting output until the selection is cleared — and a
+  blocked `write` from a coroutine freezes the loop with it.
+- **Quick Edit is turned off** on the Windows console at startup, so a stray
+  click in the window cannot pause the process in the first place.
+- **A stall detector** beats from the loop and is read from a thread, so it
+  still works when the loop does not. After `STALL_SECONDS` with no beat it
+  logs the stall and writes `logs/stall-<time>.txt` with a stack for every
+  thread — which names the line it is stuck on.
+
+`STALL_AUTO_RESTART` (off by default) makes it restart itself instead of
+staying frozen. A restart drops every stream at once, so it is deliberately the
+operator's choice; leaving it off still gets the log and the stack dump.
+
 ---
 
 ## Backup sources (failover)
@@ -425,12 +450,24 @@ primary stays broken the relay moves to the next one on its own, and only
 returns to the primary once that has proven itself again.
 
 Add them per channel: **dashboard → channel → Edit → *Backup source URLs***,
-one media URL per line — typically a direct `.m3u8` on another host:
+one per line. A backup may be either kind of URL, and which one it is is read
+from the URL itself:
 
 ```
-https://godtv.example/play?id=7424          <- the primary (Source endpoint URL)
-http://43.249.32.198:8080/memfs/d71f….m3u8  <- a backup, in the textarea
+http://backup.example:8080/memfs/d71f….m3u8   <- a stream: handed to FFmpeg as-is
+https://site.example/play/ep?id=1805657       <- a page: asked for its media URL first
 ```
+
+A **page** backup is resolved through the channel's own provider, so it reuses
+that provider's login session, cookies and response parsing — the same path the
+channel's own *Source endpoint URL* takes. It is re-asked on every retry, so a
+backup behind a URL that expires in two minutes works exactly as well as the
+primary does. Channels with no provider fall back to a plain fetch-and-extract.
+
+Detection reads the path and ignores the query, so a signed
+`…/live.m3u8?token=…` is still recognised as a stream and `…/play?id=7424` is
+still recognised as a page. Force it with a `media:` or `endpoint:` prefix on
+the line if a URL is unusual enough to fool that.
 
 ### When it leaves the primary
 

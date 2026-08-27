@@ -8,8 +8,10 @@
 
 from __future__ import annotations
 
+import atexit
 import logging
 import logging.handlers
+import queue
 import sys
 from pathlib import Path
 from typing import Iterator
@@ -25,6 +27,8 @@ _DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 _channel_loggers: dict[int, logging.Logger] = {}
 _configured = False
+#: The thread that owns the console and file handlers.
+_listener: logging.handlers.QueueListener | None = None
 
 
 class SecretScrubbingFilter(logging.Filter):
@@ -57,8 +61,6 @@ def setup_logging(log_dir: Path, level: str = "INFO") -> None:
 
     console = logging.StreamHandler(stream=sys.stdout)
     console.setFormatter(formatter)
-    console.addFilter(scrubber)
-    root.addHandler(console)
 
     file_handler = logging.handlers.RotatingFileHandler(
         log_dir / "app.log",
@@ -67,8 +69,31 @@ def setup_logging(log_dir: Path, level: str = "INFO") -> None:
         encoding="utf-8",
     )
     file_handler.setFormatter(formatter)
-    file_handler.addFilter(scrubber)
-    root.addHandler(file_handler)
+
+    # Both handlers write from a background thread rather than from whoever
+    # called the logger.
+    #
+    # This is not about speed. Almost every log line in this application is
+    # emitted from a coroutine on the event loop, and a handler that blocks
+    # blocks the loop with it - no dashboard, no watchdog, no channel recovery
+    # until the write completes. Writing to a console is very much able to
+    # block: a Windows console in selection mode stops accepting output until
+    # the selection is cleared, and a rotating file can stall behind a virus
+    # scanner holding the old file open.
+    #
+    # The queue is unbounded, so the emitting side never waits.
+    _queue: "queue.Queue[logging.LogRecord]" = queue.Queue()
+    queue_handler = logging.handlers.QueueHandler(_queue)
+    queue_handler.addFilter(scrubber)  # scrub before the record leaves the caller
+    root.addHandler(queue_handler)
+
+    global _listener
+    _listener = logging.handlers.QueueListener(
+        _queue, console, file_handler, respect_handler_level=True
+    )
+    _listener.daemon = True
+    _listener.start()
+    atexit.register(shutdown_logging)
 
     # Uvicorn's access log is noisy next to a 3-second dashboard poll.
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
@@ -76,6 +101,18 @@ def setup_logging(log_dir: Path, level: str = "INFO") -> None:
     logging.getLogger("httpcore").setLevel(logging.WARNING)
 
     _configured = True
+
+
+def shutdown_logging() -> None:
+    """Flush and stop the logging thread. Safe to call more than once."""
+    global _listener
+    listener = _listener
+    _listener = None
+    if listener is not None:
+        try:
+            listener.stop()
+        except Exception:  # noqa: BLE001 - shutdown must not raise
+            pass
 
 
 def get_logger(name: str) -> logging.Logger:

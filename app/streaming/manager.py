@@ -48,6 +48,10 @@ logger = logging.getLogger(__name__)
 #: How often the watchdog reconciles supervisors with the database.
 WATCHDOG_INTERVAL_SECONDS = 15
 
+#: A single reconcile pass may not run longer than this. Generous - it can
+#: start channels - but finite, so one wedged call cannot silence the watchdog.
+RECONCILE_TIMEOUT_SECONDS = 120
+
 
 class StreamManager:
     """Coordinates every channel supervisor."""
@@ -581,7 +585,20 @@ class StreamManager:
             while not self._shutting_down:
                 await asyncio.sleep(WATCHDOG_INTERVAL_SECONDS)
                 try:
-                    await self._reconcile()
+                    # Bounded on purpose. One reconcile that never returns -
+                    # a database call that will not come back, a provider
+                    # socket with no timeout - would otherwise stop the
+                    # watchdog for good: no channel restarted, no new channel
+                    # picked up, and nothing in the log to say why.
+                    await asyncio.wait_for(
+                        self._reconcile(), timeout=RECONCILE_TIMEOUT_SECONDS
+                    )
+                except asyncio.TimeoutError:
+                    logger.error(
+                        "watchdog reconcile did not finish within %ds - skipping "
+                        "this pass and trying again",
+                        RECONCILE_TIMEOUT_SECONDS,
+                    )
                 except Exception:  # noqa: BLE001 - watchdog must never die
                     logger.exception("watchdog iteration failed")
         except asyncio.CancelledError:  # pragma: no cover - shutdown path

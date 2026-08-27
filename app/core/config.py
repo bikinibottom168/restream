@@ -96,6 +96,18 @@ class Settings(BaseSettings):
     seamless_fps: int = 25
     relay_port_base: int = 21_000
 
+    # ---- stall detection --------------------------------------------------
+    #: Watch for an event loop that has stopped running (the application looks
+    #: alive, keeps its port, and quietly does nothing until it is restarted).
+    stall_detection_enabled: bool = True
+    #: No heartbeat for this long counts as stalled. A channel start can hold
+    #: the loop for a second or two, so this is well clear of a slow tick.
+    stall_seconds: int = 60
+    #: Restart the application by itself once it has stalled. Off by default:
+    #: a restart drops every stream, and whether that beats a frozen relay is
+    #: the operator's call. The stall is always logged and evidenced either way.
+    stall_auto_restart: bool = False
+
     # ---- ffmpeg -----------------------------------------------------------
     ffmpeg_path: str = "ffmpeg"
     ffprobe_path: str = "ffprobe"
