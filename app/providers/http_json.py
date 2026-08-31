@@ -38,6 +38,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from typing import Any, Iterable
 
 import httpx
@@ -82,6 +83,12 @@ SECRET_TOKEN = "token"
 SECRET_COOKIE = "cookie"
 
 _LOGIN_HINTS = ("/login", "/signin", "/sign-in", "/auth/login", "/authen")
+
+#: Shortest gap between two "the answer was empty, try logging in again"
+#: refreshes. An empty answer is also what an off-air channel returns, and a
+#: relay retries every few seconds, so without this a dead channel would hammer
+#: the login endpoint all night.
+QUIET_REAUTH_COOLDOWN_SECONDS = 120.0
 
 #: Matches any <input ...> tag and any attribute inside it.
 _INPUT_TAG_RE = re.compile(r"<input\b[^>]*>", re.IGNORECASE)
@@ -193,6 +200,8 @@ class HttpJsonProvider(StreamProvider):
         self._auth_lock = asyncio.Lock()
         self._auth_generation = 0
         self._last_error = ""
+        #: When a quiet-session refresh last ran (see _retry_after_relogin).
+        self._quiet_reauth_at = 0.0
         #: What the most recent form login actually did, for the "test login"
         #: button to show (names and URLs only - never a password value).
         self._login_debug: dict[str, Any] = {}
@@ -612,6 +621,52 @@ class HttpJsonProvider(StreamProvider):
     # ------------------------------------------------------------------ #
     # request plumbing
     # ------------------------------------------------------------------ #
+    async def _retry_after_relogin(
+        self,
+        what: str,
+        url: str,
+        *,
+        method: str = "GET",
+        body: Any = None,
+    ) -> httpx.Response | None:
+        """Log in again and repeat one request, for a session that died quietly.
+
+        :meth:`_request` already recovers from the honest signals - a 401, a
+        403, a bounce to the login form.  Not every site gives one.  This one
+        answers an expired session with a perfectly ordinary ``200`` whose body
+        simply has no stream in it, and because nothing looks wrong the session
+        is never refreshed: the channel fails the same way for hours, and the
+        only cure is opening the Providers page and pressing *Test login* -
+        which does nothing more than force the login this method now does.
+
+        Rate-limited: an empty answer is also what a genuinely off-air channel
+        returns, and a relay retries every few seconds.  Without the cooldown a
+        dead channel would hammer the login endpoint all night.
+        """
+        if self.auth_type not in ("form", "basic"):
+            return None  # no session to refresh; the answer means what it says
+        now = time.monotonic()
+        if now - self._quiet_reauth_at < QUIET_REAUTH_COOLDOWN_SECONDS:
+            return None
+        self._quiet_reauth_at = now
+
+        logger.info(
+            "provider %s: %s came back empty - the session may have expired "
+            "without saying so; logging in again and retrying",
+            self.name,
+            what,
+        )
+        self._authenticated = False
+        try:
+            if not await self.authenticate(force=True):
+                return None
+        except (ProviderAuthError, ProviderConfigError):
+            raise
+        except Exception:  # noqa: BLE001 - a failed refresh must not mask the real error
+            logger.exception("provider %s: re-login failed", self.name)
+            return None
+        return await self._request(url, method=method, body=body, allow_reauth=False)
+
     async def _request(
         self,
         url: str,
@@ -706,10 +761,22 @@ class HttpJsonProvider(StreamProvider):
                 "no channels URL configured for this provider"
             )
         url = join_url(self.base_url, path)
-        response = await self._request(
-            url, method=str(self.option("channels.method", "GET"))
-        )
+        method = str(self.option("channels.method", "GET"))
+        response = await self._request(url, method=method)
+        try:
+            return self._channels_from(response)
+        except ProviderUnavailable:
+            # Same quiet-expiry problem the stream resolve has: a stale session
+            # can answer with a perfectly valid, perfectly empty payload.
+            retry = await self._retry_after_relogin(
+                "the channel list", url, method=method
+            )
+            if retry is None:
+                raise
+            return self._channels_from(retry)
 
+    def _channels_from(self, response: httpx.Response) -> list[ChannelInfo]:
+        """Turn one channel-list response into channels, or say why it cannot."""
         try:
             payload = response.json()
         except (json.JSONDecodeError, ValueError) as exc:
@@ -799,9 +866,20 @@ class HttpJsonProvider(StreamProvider):
 
         stream_url = self._parse_stream_url(response, channel)
         if not stream_url:
+            retry = await self._retry_after_relogin(
+                "the stream resolve",
+                url,
+                method=str(self.option("stream.method", "GET")),
+                body=body,
+            )
+            if retry is not None:
+                response = retry
+                stream_url = self._parse_stream_url(response, channel)
+        if not stream_url:
             raise ProviderUnavailable(
-                "no stream URL found in the resolve response; check "
-                "stream.url_path or switch the parser to 'auto'"
+                "no stream URL found in the resolve response (a fresh login did "
+                "not change that): check stream.url_path, switch the parser to "
+                "'auto', or the channel may simply be off air"
             )
 
         expires_at = guess_expiry(stream_url)

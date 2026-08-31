@@ -505,3 +505,106 @@ def test_resolved_stream_masks_secrets_in_dict():
     assert "supersecret" not in json.dumps(masked)
     revealed = stream.as_dict(reveal=True)
     assert "supersecret" in json.dumps(revealed)
+
+
+# --------------------------------------------------------------------------- #
+# a session that expires without saying so
+# --------------------------------------------------------------------------- #
+QUIET_EXPIRY_CONFIG = {
+    "base_url": "https://site.test",
+    "auth": {"type": "form", "url": "/login", "username_field": "u", "password_field": "p"},
+    "stream": {"url": "/play?id={channel_id}", "parser": "auto"},
+    "channels": {"url": "/list", "list_path": "items"},
+}
+
+
+class QuietlyExpiredSite:
+    """Answers 200 with an empty payload until something logs in again.
+
+    This is the failure the honest signals miss: no 401, no 403, no bounce to
+    a login form - just a valid response with nothing in it. Without a
+    refresh the channel fails identically forever, and the only cure is
+    pressing "Test login" on the Providers page by hand.
+    """
+
+    def __init__(self) -> None:
+        self.logged_in = False
+        self.logins = 0
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/login":
+            self.logins += 1
+            self.logged_in = True
+            return httpx.Response(200, html="<html>welcome back</html>")
+        if path == "/play":
+            if not self.logged_in:
+                return httpx.Response(200, json={"status": "ok", "data": {}})
+            return httpx.Response(200, json={"url": "https://cdn.test/live.m3u8"})
+        if path == "/list":
+            if not self.logged_in:
+                return httpx.Response(200, json={"items": []})
+            return httpx.Response(200, json={"items": [{"id": "1", "name": "One"}]})
+        return httpx.Response(404)
+
+
+def _quiet_expiry_provider(site: QuietlyExpiredSite) -> HttpJsonProvider:
+    provider = HttpJsonProvider(
+        name="test", config=QUIET_EXPIRY_CONFIG,
+        secrets={"username": "u", "password": "p"},
+    )
+    provider._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(site),
+        base_url="https://site.test",
+        follow_redirects=True,
+    )
+    provider._authenticated = True  # it believes it has a session; it does not
+    return provider
+
+
+async def test_an_empty_resolve_logs_in_again_instead_of_failing():
+    site = QuietlyExpiredSite()
+    provider = _quiet_expiry_provider(site)
+    try:
+        stream = await provider.resolve_stream(ChannelInfo(id="7424", name="ch"))
+    finally:
+        await provider._client.aclose()
+    assert stream.url == "https://cdn.test/live.m3u8"
+    assert site.logins == 1, "the session must be refreshed without an operator"
+
+
+async def test_an_empty_channel_list_logs_in_again_too():
+    site = QuietlyExpiredSite()
+    provider = _quiet_expiry_provider(site)
+    try:
+        channels = await provider.list_channels()
+    finally:
+        await provider._client.aclose()
+    assert [c.name for c in channels] == ["One"]
+    assert site.logins == 1
+
+
+async def test_a_channel_that_is_merely_off_air_does_not_hammer_the_login():
+    """An empty answer also means "nothing is playing", and relays retry fast."""
+    site = QuietlyExpiredSite()
+    site.logged_in = False
+    provider = _quiet_expiry_provider(site)
+
+    def always_empty(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login":
+            site.logins += 1
+            return httpx.Response(200, html="<html>ok</html>")
+        return httpx.Response(200, json={"status": "ok", "data": {}})
+
+    provider._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(always_empty),
+        base_url="https://site.test",
+        follow_redirects=True,
+    )
+    try:
+        for _ in range(5):
+            with pytest.raises(ProviderUnavailable):
+                await provider.resolve_stream(ChannelInfo(id="7424", name="ch"))
+    finally:
+        await provider._client.aclose()
+    assert site.logins == 1, "the cooldown must hold off the other four attempts"

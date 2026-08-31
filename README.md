@@ -408,6 +408,16 @@ If the provider session has expired, the provider re-authenticates once and the
 request is retried. Channels that are still working are **not** restarted
 because a session expired elsewhere.
 
+That covers a session that expires *honestly* — a `401`, a `403`, a bounce to
+the login form. Some sites do not say so: they answer an expired session with
+an ordinary `200` whose body simply has no stream in it. Nothing looks wrong,
+so the session is never refreshed and the channel fails the same way for hours
+with `no stream URL found in the resolve response`. When a resolve or a channel
+list comes back empty, the provider now logs in again and repeats the request
+once — the same thing pressing *Test login* on the Providers page does by hand.
+A cooldown (two minutes) keeps a genuinely off-air channel, which also answers
+empty, from hammering the login endpoint on every retry.
+
 On startup the app checks for FFmpeg processes left behind by a crash and
 terminates them — but only those it can prove it started, by matching pid,
 process creation time and the exact argument vector. Another application's
